@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>sibarum.elektro.queue</groupId>
+        <artifactId>elektroq</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>elektroq-transport-local</artifactId>
+    <packaging>jar</packaging>
+
+    <description>
+        In-VM implementation of the elektroq-core Transport SPI: moves framed buffers between
+        conduits in the same JVM over bounded queues on virtual threads, with no sockets. Lets the
+        same Action/Conduit/Actor code span threads exactly as the TCP transport spans processes.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>sibarum.elektro.queue</groupId>
+            <artifactId>elektroq-core</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

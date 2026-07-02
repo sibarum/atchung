@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>sibarum.elektro.queue</groupId>
+        <artifactId>elektroq</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>elektroq-netcode</artifactId>
+    <packaging>jar</packaging>
+
+    <description>
+        Real-time netcode over UDP for elektro-Q (see docs/netcode-design.md). Phase 1: the raw
+        UdpTransport (an unreliable-datagram implementation of the Transport SPI) and a
+        transport-agnostic network simulator for deterministic testing. Later phases layer
+        connection, sequencing/acks, channels with delivery modes, fragmentation, and congestion
+        control on top. JDK-only, reflection-free.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>sibarum.elektro.queue</groupId>
+            <artifactId>elektroq-core</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+        <!-- Test-only: the in-VM transport is the deterministic substrate the simulator wraps. -->
+        <dependency>
+            <groupId>sibarum.elektro.queue</groupId>
+            <artifactId>elektroq-transport-local</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

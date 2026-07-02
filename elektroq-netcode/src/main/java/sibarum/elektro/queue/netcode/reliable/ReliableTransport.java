@@ -2,11 +2,17 @@ package sibarum.elektro.queue.netcode.reliable;
 
 import sibarum.elektro.queue.ElektroException;
 import sibarum.elektro.queue.message.PeerId;
+import sibarum.elektro.queue.netcode.channel.ChannelReceiver;
+import sibarum.elektro.queue.netcode.channel.ChannelSender;
+import sibarum.elektro.queue.netcode.channel.DeliveryMode;
+import sibarum.elektro.queue.netcode.channel.MessageCodec;
+import sibarum.elektro.queue.netcode.channel.NetMessage;
 import sibarum.elektro.queue.transport.FrameListener;
 import sibarum.elektro.queue.transport.PeerListener;
 import sibarum.elektro.queue.transport.Transport;
 
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -44,6 +50,16 @@ public final class ReliableTransport implements Transport {
     private static final long DEFAULT_KEEPALIVE_MILLIS = 150;
     private static final long DEFAULT_TIMEOUT_MILLIS = 5_000;
 
+    /** Channel used by the plain {@link Transport#send} path (reliable-ordered, TCP-like default). */
+    private static final int DEFAULT_CHANNEL = 0;
+    /** Byte budget for a single packet's message container, kept well under a typical MTU. */
+    private static final int PACKET_BUDGET = 1100;
+
+    /** Channel-aware receive callback. When set, it replaces the plain {@link FrameListener}. */
+    public interface NetcodeListener {
+        void onMessage(PeerId peer, int channelId, byte[] payload);
+    }
+
     private static final PeerListener NO_PEER_LISTENER = new PeerListener() {
         @Override public void onConnected(PeerId peer) { }
         @Override public void onDisconnected(PeerId peer) { }
@@ -63,6 +79,7 @@ public final class ReliableTransport implements Transport {
 
     private volatile FrameListener frameListener = (source, frame) -> { };
     private volatile PeerListener peerListener = NO_PEER_LISTENER;
+    private volatile NetcodeListener netcodeListener;
     private volatile boolean closed;
 
     private ReliableTransport(Transport delegate, Role role, long keepaliveMillis, long timeoutMillis) {
@@ -112,13 +129,23 @@ public final class ReliableTransport implements Transport {
         return started;
     }
 
+    /** Plain SPI send: reliable-ordered on the default channel (TCP-like), so a conduit rides it unchanged. */
     @Override
     public void send(PeerId destination, ByteBuffer frame) {
+        send(destination, DEFAULT_CHANNEL, DeliveryMode.RELIABLE_ORDERED, frame);
+    }
+
+    /**
+     * Sends {@code frame} on {@code channelId} with the given {@code mode}. Independent channels do
+     * not block one another; the mode picks the delivery guarantee (docs/netcode-design.md).
+     */
+    public void send(PeerId destination, int channelId, DeliveryMode mode, ByteBuffer frame) {
         byte[] payload = drain(frame);
         if (destination == null || destination.isBroadcast()) {
             for (Session s : sessions.values()) {
                 if (s.established) {
-                    sendPacket(s, PacketType.DATA, payload);
+                    enqueue(s, channelId, mode, payload);
+                    flush(s);
                 }
             }
         } else {
@@ -126,8 +153,14 @@ public final class ReliableTransport implements Transport {
             if (s == null || !s.established) {
                 throw new ElektroException("No established peer with id " + destination.handle());
             }
-            sendPacket(s, PacketType.DATA, payload);
+            enqueue(s, channelId, mode, payload);
+            flush(s);
         }
+    }
+
+    /** Installs a channel-aware receive callback; when set it replaces the plain frame listener. */
+    public void onNetcodeMessage(NetcodeListener listener) {
+        this.netcodeListener = listener;
     }
 
     @Override
@@ -204,7 +237,15 @@ public final class ReliableTransport implements Transport {
             case PacketType.KEEPALIVE -> { /* acks already absorbed above */ }
             case PacketType.DATA -> {
                 if (s.established) {
-                    frameListener.onFrame(source, ByteBuffer.wrap(packet.payload()));
+                    List<NetMessage> delivered = s.receiver.accept(MessageCodec.decode(packet.payload()));
+                    NetcodeListener nc = netcodeListener;
+                    for (NetMessage m : delivered) {
+                        if (nc != null) {
+                            nc.onMessage(source, m.channelId(), m.payload());
+                        } else {
+                            frameListener.onFrame(source, ByteBuffer.wrap(m.payload()));
+                        }
+                    }
                 }
             }
             default -> { /* unknown type: ignore */ }
@@ -220,10 +261,44 @@ public final class ReliableTransport implements Transport {
                 if (now - s.lastSentNanos > keepaliveNanos) {
                     sendPacket(s, PacketType.CONNECT, EMPTY); // retransmit handshake until accepted
                 }
-            } else if (s.established && now - s.lastSentNanos > keepaliveNanos) {
-                sendPacket(s, PacketType.KEEPALIVE, EMPTY); // stay alive + carry fresh acks
+            } else if (s.established) {
+                flush(s); // (re)send any queued or overdue reliable messages
+                if (System.nanoTime() - s.lastSentNanos > keepaliveNanos) {
+                    sendPacket(s, PacketType.KEEPALIVE, EMPTY); // stay alive + carry fresh acks
+                }
             }
         }
+    }
+
+    private void enqueue(Session s, int channelId, DeliveryMode mode, byte[] payload) {
+        synchronized (s) {
+            s.sender.enqueue(channelId, mode, payload);
+        }
+    }
+
+    /** Packs one packet's worth of due messages (new + overdue reliable) and sends it, if any. */
+    private void flush(Session s) {
+        byte[] datagram = null;
+        synchronized (s) {
+            if (!s.established) {
+                return;
+            }
+            long now = System.nanoTime();
+            int seq = s.endpoint.peekNextSequence();
+            List<NetMessage> messages = s.sender.pack(seq, now, rtoNanos(s), PACKET_BUDGET);
+            if (!messages.isEmpty()) {
+                datagram = s.endpoint.stamp(PacketType.DATA, MessageCodec.encode(messages));
+                s.lastSentNanos = now;
+            }
+        }
+        if (datagram != null) {
+            delegate.send(s.peer, ByteBuffer.wrap(datagram));
+        }
+    }
+
+    private long rtoNanos(Session s) {
+        long rttMillis = s.endpoint.rttMillis();
+        return Math.max(100, rttMillis * 2) * 1_000_000L;
     }
 
     private void sendPacket(Session s, int type, byte[] payload) {
@@ -248,16 +323,21 @@ public final class ReliableTransport implements Transport {
         return bytes;
     }
 
-    /** Per-peer connection state: its endpoint plus liveness timestamps. */
+    /** Per-peer connection state: its endpoint, channel send/receive state, and liveness timestamps. */
     private final class Session {
         final PeerId peer;
         final ReliableEndpoint endpoint = new ReliableEndpoint(PROTOCOL_ID);
+        final ChannelSender sender = new ChannelSender();
+        final ChannelReceiver receiver = new ChannelReceiver();
         volatile boolean established;
         volatile long lastReceivedNanos = System.nanoTime();
         volatile long lastSentNanos = 0;
 
         Session(PeerId peer) {
             this.peer = peer;
+            // A packet ack retires the reliable messages it carried (invoked under this session's
+            // lock, from endpoint.process in onRawFrame).
+            this.endpoint.setPacketListener(sender::acked);
         }
     }
 }

@@ -46,6 +46,13 @@ public final class ReliableEndpoint {
     private double rttMillisEwma = -1;               // -1 until the first sample
     private double lossEwma = 0;
 
+    /** Notified as our sent packets are acknowledged — the channel layer uses this to retire messages. */
+    public interface PacketListener {
+        void onAcked(int sequence);
+    }
+
+    private PacketListener packetListener = seq -> { };
+
     public ReliableEndpoint(int protocolId) {
         this(protocolId, System::nanoTime);
     }
@@ -87,6 +94,16 @@ public final class ReliableEndpoint {
         // Absorb the peer's acknowledgement of our packets.
         applyAck(packet.ack(), packet.ackBits());
         return packet;
+    }
+
+    /** Installs the listener notified when our sent packets are acknowledged. */
+    public void setPacketListener(PacketListener listener) {
+        this.packetListener = listener != null ? listener : seq -> { };
+    }
+
+    /** The sequence the next {@link #stamp} will assign (without consuming it). */
+    public int peekNextSequence() {
+        return localSequence;
     }
 
     /** Smoothed round-trip time in milliseconds, or 0 before the first sample. */
@@ -136,6 +153,7 @@ public final class ReliableEndpoint {
             sentAcked[slot] = true;
             double sampleMillis = (nanoClock.getAsLong() - sentTimeNanos[slot]) / 1_000_000.0;
             rttMillisEwma = rttMillisEwma < 0 ? sampleMillis : ewma(rttMillisEwma, sampleMillis);
+            packetListener.onAcked(seq);
         }
     }
 

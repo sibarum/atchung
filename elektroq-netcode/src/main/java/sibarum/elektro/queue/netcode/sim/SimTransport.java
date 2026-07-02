@@ -41,11 +41,21 @@ public final class SimTransport implements Transport {
     private final AtomicLong duplicated = new AtomicLong();
 
     private volatile boolean closed;
+    private volatile boolean blackhole;
 
     public SimTransport(Transport delegate, SimParams params) {
         this.delegate = delegate;
         this.params = params;
         this.random = new Random(params.seed());
+    }
+
+    /**
+     * Drops <em>all</em> outbound frames while enabled &mdash; simulates the link going dead, so a
+     * higher layer's keepalive/timeout can be exercised. Distinct from {@code lossProbability}, which
+     * is a steady random drop rate.
+     */
+    public void blackhole(boolean enabled) {
+        this.blackhole = enabled;
     }
 
     /** A point-in-time snapshot of what impairment this link applied. */
@@ -63,6 +73,11 @@ public final class SimTransport implements Transport {
         offered.incrementAndGet();
         byte[] bytes = new byte[frame.remaining()];
         frame.get(bytes);
+
+        if (blackhole) {
+            dropped.incrementAndGet();
+            return;
+        }
 
         boolean loss;
         boolean duplicate;

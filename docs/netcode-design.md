@@ -135,6 +135,30 @@ Real-time media diverges from game state and needs its own toolkit on top of L2�
 Net: the media profile = unreliable-sequenced base + FEC + bounded NACK + jitter buffer + timestamps —
 essentially a lean RTP/WebRTC-media transport riding the same L0–L2 as the game path.
 
+## 4b. Connections, broadcast, and addressing
+
+The framework is multi-peer from the base `Transport`/`Conduit` model up, and the netcode layers
+preserve that per peer:
+
+- **Many connections per endpoint.** One `ReliableTransport` holds N independent sessions keyed by
+  `PeerId` — each with its own `ReliableEndpoint` (sequence space, RTT, loss) and its own
+  channel send/receive state (per-channel sequences, reliable queues, ordering buffers). A server
+  on `listening` discovers and handshakes each client separately; `conduit.peers()` reflects the
+  live set.
+- **Broadcast vs. specific destination.** `emit(msg)` → `PeerId.BROADCAST` fans out to every
+  established peer; `emit(msg, peer)` and `request(msg, peer, …)` target one. This is
+  **application-level fan-out (N independent unicast sends), not IP multicast** — and a *reliable*
+  broadcast is therefore **N independent reliable streams** (the payload is queued, sequenced,
+  retransmitted, and ordered separately per peer, because peers have independent loss). Correct, and
+  the right model for per-client state broadcast, but its cost scales with peer count.
+- **The gap — initiating multiple *outbound* connections.** The current `Role` split is asymmetric:
+  a server accepts many, a client dials exactly one upstream. A node that wants to *dial several
+  specific peers* (a P2P mesh, or a client of multiple servers) isn't cleanly supported yet. The fix
+  is a **symmetric peer model**: `UdpTransport.connectTo(address) → PeerId` (add a peer + initiate)
+  plus a role that both listens and dials on demand, instead of binary client/server. This is P2P
+  territory and travels with the deferred NAT-traversal track; the authoritative-server model needs
+  none of it.
+
 ## 5. Cross-cutting concerns
 
 - **Encryption/auth (built-in, optional).** Per-packet AEAD (X25519 handshake + ChaCha20-Poly1305,
@@ -185,6 +209,46 @@ voice.onFrame((bytes, ts) -> playout(bytes, ts));
 For Pontif, this extends [`pontif.net`](../../pontif-framework/pontif-builtin-net): `connect`/`listen`
 gain an optional delivery mode, and a `mediaChannel` builtin surfaces the media profile — the same
 program spanning thread → process → LAN → internet, now with a latency/reliability knob.
+
+## 7b. Rooms & pub/sub — a socket.io-style surface
+
+The reference point for the app-facing API is socket.io's broadcast/subscription model. Most of it
+maps onto primitives we already have; the gap is **rooms** and **broadcast-except-sender**.
+
+| socket.io | elektro-Q | status |
+|---|---|---|
+| server as fan-out hub | `ReliableTransport`/`Conduit` with N sessions | have |
+| `io.to(id).emit` / `io.emit` | `emit(msg, peer)` / `emit(msg)` | have |
+| `emit(ev,data,ack)` | `request(msg, peer, replyType)` | have |
+| `socket.on("ev")` | typed `subscribe(MessageType, Actor)`; Pontif routes by type name | have (typed) |
+| rooms: `join`/`leave`, `io.to("room").emit` | — | **build** |
+| `socket.broadcast.emit` (all but sender), `to().to()` union, `except()` | — | **build** |
+
+**Reframe.** socket.io is reliable-ordered-only over TCP/WebSocket. elektro-Q already has the hub and
+adds the thing socket.io lacks — per-message delivery modes — so this layer gives socket.io's
+ergonomics *plus* a per-emit guarantee, and, being pure membership + fan-out over the `Conduit` API,
+it is **transport-agnostic** (works over TCP and the in-VM transport, not only UDP).
+
+Proposed `Rooms` component on a server-side conduit:
+
+```java
+Rooms rooms = new Rooms(conduit);
+rooms.join(peer, "lobby");                        // server-driven, like socket.join
+rooms.to("lobby").emit(type, msg);                // io.to("lobby").emit
+rooms.to("lobby").except(sender).emit(type, msg); // socket.to("lobby").emit
+rooms.all().except(sender).emit(type, msg);       // socket.broadcast.emit
+rooms.to("a").to("b").emit(type, msg);            // union, deduped
+rooms.to("game-42").emit(type, msg, UNRELIABLE_SEQUENCED); // + a delivery mode (netcode only)
+```
+
+Membership is server-driven (the app calls `join`/`leave`), exactly as socket.io's server calls
+`socket.join`; an optional built-in join/leave request lets clients ask. The subscription side stays
+elektro-Q's typed `subscribe` (the `on("event")` analog), already string-named at the Pontif layer.
+
+Incremental path: **socket.io parity first** (rooms + broadcast variants, reliable-ordered — exactly
+socket.io's semantics), then thread the delivery-mode argument through for the netcode superset. This
+layer is transport-agnostic, so it could live in its own small module (`elektroq-hub`) usable over
+any transport, rather than inside the netcode module.
 
 ## 8. Phasing (incremental — each phase is independently useful)
 

@@ -53,6 +53,42 @@ or `BLOCK` (apply upstream backpressure — off the realtime path only).
 Ordering is per-topic FIFO from a single publisher. The bus passes event references **without
 copying or serialization** — it is pure in-VM.
 
+**Pause / resume.** Any `Subscription` can `pause()` and `resume()` — the primitive for "stop
+receiving" without unsubscribing. Pausing is **lossy**: events during a pause are dropped, not
+buffered. The bus has no notion of *why* you paused (focus, priority, …) — that lives in your code.
+
+## Two broadcast shapes: events and state
+
+Events answer *"what happened"* — each consumer folds them into its own state. **`State<T>` answers
+*"what is true now"***: one producer owns a value, consumers read coherent immutable versions. This
+is the shape for things like pointer position or a document model, where only the latest value
+matters and lossy pause must stay safe (on resume you just re-read the current version — no
+stuck-key staleness).
+
+```java
+State.Builder<Camera> b = State.of(new Camera(origin));
+Committer<Camera, Vec3>  MOVE = b.mutation("move", (c, d) -> c.movedBy(d));   // declared up front
+Committer<Camera, Float> ZOOM = b.mutation("zoom", (c, f) -> c.zoomed(f));
+State<Camera> cam = b.history(64, Duration.ofSeconds(2)).build();
+
+// Producer (only the owner) — no ad-hoc writes, only declared commits:
+cam.commit(MOVE, delta);                 // atomic -> new immutable version, version++
+
+// Consumers:
+Versioned<Camera> now = cam.current();   // poll (lock-free, zero-copy); read as often as you like
+Subscription s = cam.onCommit(v -> ...); // react per new version (pausable/lossy)
+Versioned<Camera> next = cam.await(now.version()); // block until a newer version
+Optional<Versioned<Camera>> old = cam.at(now.version() - 1); // bounded history
+```
+
+- **Threadsafe by construction, not obstruction:** lock-free reads (immutable snapshot behind an
+  atomic reference), lock-free CAS commit. No mutex on the data path.
+- **Atomicity is per-state, single-producer** — no cross-state transactions.
+- **Bounded history** (max depth and/or TTL) means no unbounded growth.
+- **Forward-designed for remote:** the version number is the delta/keyframe hook, and a named
+  commit command is the replicable unit (ship the command *or* the snapshot) — the remote bridge
+  adds that machinery without changing this surface.
+
 ## Going remote
 
 Atchung! is in-VM by design. To ship events across processes or machines, bridge the bus to a

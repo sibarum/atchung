@@ -10,9 +10,8 @@ import java.util.List;
  * thread and invokes the subscriber for each queued event. This is the thread hand-off that gives
  * pumped subscribers their affinity: events are produced anywhere, consumed where {@code drain()} is called.
  */
-final class PumpedReg<T> implements Atchung.Reg<T> {
+final class PumpedReg<T> extends Atchung.Reg<T> {
 
-    private final Topic<T> topic;
     private final Subscriber<T> subscriber;
     private final int capacity;
     private final Backpressure backpressure;
@@ -21,10 +20,10 @@ final class PumpedReg<T> implements Atchung.Reg<T> {
     private final Object lock = new Object();
 
     PumpedReg(Topic<T> topic, Subscriber<T> subscriber, int capacity, Backpressure backpressure) {
+        super(topic);
         if (capacity < 1) {
             throw new IllegalArgumentException("capacity must be >= 1, was " + capacity);
         }
-        this.topic = topic;
         this.subscriber = subscriber;
         this.backpressure = backpressure;
         this.capacity = backpressure == Backpressure.COALESCE_LATEST ? 1 : capacity;
@@ -32,12 +31,7 @@ final class PumpedReg<T> implements Atchung.Reg<T> {
     }
 
     @Override
-    public Topic<T> topic() {
-        return topic;
-    }
-
-    @Override
-    public void deliver(T event) {
+    void doDeliver(T event) {
         synchronized (lock) {
             switch (backpressure) {
                 case DROP_OLDEST -> {

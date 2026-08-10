@@ -105,6 +105,41 @@ class AtchungTest {
     }
 
     @Test
+    void pauseIsLossyForPushSubscribers() {
+        Atchung bus = Atchung.create();
+        List<String> got = new ArrayList<>();
+        Subscription sub = bus.subscribe(MSG, got::add);
+
+        bus.publish(MSG, "before");
+        sub.pause();
+        assertTrue(sub.isPaused());
+        bus.publish(MSG, "during-1");
+        bus.publish(MSG, "during-2");
+        sub.resume();
+        assertFalse(sub.isPaused());
+        bus.publish(MSG, "after");
+
+        assertEquals(List.of("before", "after"), got, "events during pause are lost, not buffered");
+    }
+
+    @Test
+    void pauseIsLossyForPumpedSubscribers() {
+        Atchung bus = Atchung.create();
+        Pump pump = bus.pump();
+        List<String> got = new ArrayList<>();
+        Subscription sub = pump.subscribe(MSG, got::add, 16, Backpressure.DROP_OLDEST);
+
+        bus.publish(MSG, "a");
+        sub.pause();
+        bus.publish(MSG, "lost");
+        sub.resume();
+        bus.publish(MSG, "b");
+        pump.drain();
+
+        assertEquals(List.of("a", "b"), got, "paused mailbox is not filled");
+    }
+
+    @Test
     void asyncDeliversOnExecutor() throws Exception {
         Atchung bus = Atchung.create();
         ExecutorService exec = Executors.newSingleThreadExecutor(r -> {

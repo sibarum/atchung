@@ -102,23 +102,65 @@ public final class Atchung {
         return Objects.requireNonNull(subscriber, "subscriber");
     }
 
-    /** A routing entry: knows its topic and how to deliver one event. */
-    interface Reg<T> {
-        Topic<T> topic();
+    /**
+     * A routing entry: knows its topic and how to deliver one event. Delivery is gated by a paused
+     * flag — pausing is lossy, so a paused entry simply drops the event (it is never buffered here).
+     */
+    abstract static class Reg<T> {
+        private final Topic<T> topic;
+        private volatile boolean paused;
 
-        void deliver(T event);
+        Reg(Topic<T> topic) {
+            this.topic = topic;
+        }
+
+        final Topic<T> topic() {
+            return topic;
+        }
+
+        final void deliver(T event) {
+            if (!paused) {
+                doDeliver(event);
+            }
+        }
+
+        final void setPaused(boolean paused) {
+            this.paused = paused;
+        }
+
+        final boolean isPaused() {
+            return paused;
+        }
+
+        abstract void doDeliver(T event);
     }
 
-    private record InlineReg<T>(Topic<T> topic, Subscriber<T> subscriber) implements Reg<T> {
+    private static final class InlineReg<T> extends Reg<T> {
+        private final Subscriber<T> subscriber;
+
+        InlineReg(Topic<T> topic, Subscriber<T> subscriber) {
+            super(topic);
+            this.subscriber = subscriber;
+        }
+
         @Override
-        public void deliver(T event) {
+        void doDeliver(T event) {
             subscriber.on(event);
         }
     }
 
-    private record AsyncReg<T>(Topic<T> topic, Subscriber<T> subscriber, Executor executor) implements Reg<T> {
+    private static final class AsyncReg<T> extends Reg<T> {
+        private final Subscriber<T> subscriber;
+        private final Executor executor;
+
+        AsyncReg(Topic<T> topic, Subscriber<T> subscriber, Executor executor) {
+            super(topic);
+            this.subscriber = subscriber;
+            this.executor = executor;
+        }
+
         @Override
-        public void deliver(T event) {
+        void doDeliver(T event) {
             executor.execute(() -> subscriber.on(event));
         }
     }
@@ -134,6 +176,21 @@ public final class Atchung {
         @Override
         public boolean isActive() {
             return active;
+        }
+
+        @Override
+        public void pause() {
+            reg.setPaused(true);
+        }
+
+        @Override
+        public void resume() {
+            reg.setPaused(false);
+        }
+
+        @Override
+        public boolean isPaused() {
+            return reg.isPaused();
         }
 
         @Override

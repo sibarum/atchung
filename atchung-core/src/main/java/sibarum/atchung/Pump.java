@@ -79,6 +79,21 @@ public final class Pump {
         }
 
         @Override
+        public void pause() {
+            busSub.pause();
+        }
+
+        @Override
+        public void resume() {
+            busSub.resume();
+        }
+
+        @Override
+        public boolean isPaused() {
+            return busSub.isPaused();
+        }
+
+        @Override
         public void close() {
             if (!active) {
                 return;

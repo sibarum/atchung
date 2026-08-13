@@ -1,102 +1,94 @@
-# Atchung!
+# Atchung: ElectroQ!
 
-**Attention! Something happened.**
+**Attention! Something happened — here, or across the wire.**
 
-A realtime, multithreaded **broadcast-and-subscribe event bus** for the JVM and GraalVM
-native-image. Publish an event on a topic; every subscriber is notified. Pure Java, no reflection,
-no native code, no dependencies — every component (input, graphics, GUI, workers) is just a
-producer/consumer on the bus.
+Two complementary messaging layers for the JVM and GraalVM native-image, under one roof:
 
-## Why it exists
+- **Atchung!** (`atchung-core`) — a realtime, multithreaded **in-VM broadcast/subscribe event bus**.
+  Publish an event on a topic; every subscriber reacts. Zero-copy, zero-dependency, no reflection.
+- **elektro-Q** (`elektroq/`) — a reflection-free **message-passing stack** that moves typed messages
+  **between processes and across the network**. Codecs are generated at compile time from annotated
+  records, so the whole stack compiles to a native binary with zero reachability configuration.
+- **The bridge** (`atchung-elektroq`) — glue that lets a local `Topic` cross the wire. Author your
+  events once as `@Message` records; the bus fans them out in-process and elektro-Q carries them out.
 
-A realtime pub/sub event system is the connective tissue of a desktop application: one user action
-fans out to many independent components, each reacting differently. Atchung! is that fabric as a
-standalone library, decoupled from any language runtime or transport — so an input middleware, a
-graphics engine, and a GUI toolkit can all meet on the same bus without depending on each other.
+The design principle across both: **the fast in-VM path never pays for the network.** Cross-process
+delivery is opt-in and lives entirely in elektro-Q and the bridge — the bus core stays pure.
 
-## Model
+## Modules
 
-| Concept | What it is |
-|---------|-----------|
-| `Topic<T>` | A typed channel identity (`name` + payload type). Publishers and subscribers rendezvous on equal topics. |
-| `Atchung` | The bus. `publish(topic, event)`, `subscribe(...)`, `pump()`. |
-| `Subscriber<T>` | `void on(T event)` — the reaction. |
-| `Subscription` | `AutoCloseable` handle; close to stop delivery. |
-| `Pump` | A per-thread drain point for pumped subscribers. |
+| Module | What it provides |
+|---|---|
+| `atchung-core` | The event bus: `Topic`, `Atchung`, inline/async/pumped delivery, `Backpressure`, pause/resume, and the `State<T>` synchronization primitive. Pure Java, no dependencies. |
+| `atchung-elektroq` | `ElektroBridge` — wires an `Atchung` bus to an elektro-Q `Conduit`, both directions, with loop prevention. |
+| `elektroq/` | The cross-process stack (own aggregator; coordinates `sibarum.elektro.queue:*`). See [`elektroq/README.md`](elektroq/README.md) for the full tutorial. Modules: `elektroq-core`, `elektroq-codegen`, `elektroq-transport-tcp`, `elektroq-transport-local`, `elektroq-netcode`, `elektroq-example`. |
 
-## Delivery modes (chosen per subscriber)
+## Which layer do I want?
+
+- **One process, many components** (input, graphics, GUI, workers meeting on a bus) → **Atchung!**.
+  See the model, delivery modes, and `State<T>` below.
+- **Two processes or two machines** exchanging typed messages, with request/reply and schema
+  versioning → **elektro-Q** directly ([`elektroq/README.md`](elektroq/README.md)).
+- **A local bus whose selected topics should also reach a remote peer** → keep publishing on the bus
+  and add an **`ElektroBridge`**.
+
+## Atchung! in one screen
 
 ```java
-Atchung bus = Atchung.create();               // or Atchung.global()
+Atchung bus = Atchung.create();                 // or Atchung.global()
 Topic<InputEvent> INPUT = Topic.of("input", InputEvent.class);
 
-// inline — run on the publisher's thread (lowest latency; keep it cheap)
-bus.subscribe(INPUT, e -> ...);
-
-// async — run on your executor (background/heavy work)
-bus.subscribeAsync(INPUT, e -> ..., workerPool);
-
-// pumped — queue into a bounded mailbox, deliver on YOUR thread when you drain
-Pump ui = bus.pump();
+bus.subscribe(INPUT, e -> ...);                  // inline — publisher's thread, lowest latency
+bus.subscribeAsync(INPUT, e -> ..., workerPool); // async — your executor
+Pump ui = bus.pump();                            // pumped — drain on YOUR thread, once per frame
 ui.subscribe(INPUT, e -> ..., 256, Backpressure.DROP_OLDEST);
-// ...once per frame on the render thread:
-ui.drain();
 
-bus.publish(INPUT, event);                      // non-blocking, fans out to all three
+bus.publish(INPUT, event);                       // non-blocking; fans out to all three
+ui.drain();                                      // deliver queued events on the render thread
 ```
 
-**Publishing never blocks** (except a `BLOCK` mailbox): a fast producer is never stalled by a slow
-consumer. When a pumped mailbox is full, `Backpressure` decides: `DROP_OLDEST` (default),
-`DROP_NEWEST`, `COALESCE_LATEST` (keep only the newest — ideal for pointer position / window size),
-or `BLOCK` (apply upstream backpressure — off the realtime path only).
+Publishing never blocks (save a `BLOCK` mailbox); a full pumped mailbox is resolved by
+`Backpressure` (`DROP_OLDEST`, `DROP_NEWEST`, `COALESCE_LATEST`, `BLOCK`). Any `Subscription` can
+`pause()`/`resume()` (lossy — events during a pause are dropped, not buffered).
 
-Ordering is per-topic FIFO from a single publisher. The bus passes event references **without
-copying or serialization** — it is pure in-VM.
+**Events vs. state.** Events answer *"what happened."* `State<T>` answers *"what is true now"* — one
+producer commits declared mutations, consumers read coherent immutable versions (lock-free), react
+per version, or block until a newer one exists, with bounded history. The version number and named
+commit commands are the replication hooks the bridge builds on.
 
-**Pause / resume.** Any `Subscription` can `pause()` and `resume()` — the primitive for "stop
-receiving" without unsubscribing. Pausing is **lossy**: events during a pause are dropped, not
-buffered. The bus has no notion of *why* you paused (focus, priority, …) — that lives in your code.
+## Crossing the wire with the bridge
 
-## Two broadcast shapes: events and state
-
-Events answer *"what happened"* — each consumer folds them into its own state. **`State<T>` answers
-*"what is true now"***: one producer owns a value, consumers read coherent immutable versions. This
-is the shape for things like pointer position or a document model, where only the latest value
-matters and lossy pause must stay safe (on resume you just re-read the current version — no
-stuck-key staleness).
+Declare the event as an elektro-Q `@Message` record (the codec is generated), then bridge its topic:
 
 ```java
-State.Builder<Camera> b = State.of(new Camera(origin));
-Committer<Camera, Vec3>  MOVE = b.mutation("move", (c, d) -> c.movedBy(d));   // declared up front
-Committer<Camera, Float> ZOOM = b.mutation("zoom", (c, f) -> c.zoomed(f));
-State<Camera> cam = b.history(64, Duration.ofSeconds(2)).build();
+Conduit conduit = ElektroTcp.client("client", "127.0.0.1", 7000, registry);
+conduit.start().toCompletableFuture().join();
 
-// Producer (only the owner) — no ad-hoc writes, only declared commits:
-cam.commit(MOVE, delta);                 // atomic -> new immutable version, version++
+Topic<Move> MOVE = Topic.of("move", Move.class);   // Move is an @Message record
 
-// Consumers:
-Versioned<Camera> now = cam.current();   // poll (lock-free, zero-copy); read as often as you like
-Subscription s = cam.onCommit(v -> ...); // react per new version (pausable/lossy)
-Versioned<Camera> next = cam.await(now.version()); // block until a newer version
-Optional<Versioned<Camera>> old = cam.at(now.version() - 1); // bounded history
+ElektroBridge bridge = new ElektroBridge(bus, conduit)
+        .bridge(MOVE, MoveCodec.TYPE);              // both directions
+
+bus.publish(MOVE, new Move(dx, dy));               // fans out locally AND goes over the wire
 ```
 
-- **Threadsafe by construction, not obstruction:** lock-free reads (immutable snapshot behind an
-  atomic reference), lock-free CAS commit. No mutex on the data path.
-- **Atomicity is per-state, single-producer** — no cross-state transactions.
-- **Bounded history** (max depth and/or TTL) means no unbounded growth.
-- **Forward-designed for remote:** the version number is the delta/keyframe hook, and a named
-  commit command is the replicable unit (ship the command *or* the snapshot) — the remote bridge
-  adds that machinery without changing this surface.
-
-## Going remote
-
-Atchung! is in-VM by design. To ship events across processes or machines, bridge the bus to a
-transport in a **separate** module (e.g. `atchung-elektroq`, planned) — a subscriber that forwards
-selected topics onto the wire, and an inbound adapter that re-publishes them locally. The core stays
-pure and fast; network transparency is opt-in and never taxes local delivery.
+`bridge(...)` wires both directions; `outbound(...)`/`inbound(...)` pick one. Re-published inbound
+messages are not echoed back to the wire, and a bridge does not relay between peers — a message from
+one peer is delivered locally, not fanned back to the others.
 
 ## Requirements
 
-- JDK 25+ (enforced by `maven-enforcer-plugin`).
-- No runtime dependencies; native-image clean (no reflection, no `ServiceLoader`, no native code).
+- **JDK 25+** (enforced by `maven-enforcer-plugin`). A **GraalVM** JDK only for native builds.
+- **Maven 3.9+**.
+- `atchung-core` has no runtime dependencies and is native-image clean; elektro-Q adds no runtime
+  dependencies either (its codec generator is compile-time only).
+
+## Build
+
+```bash
+mvn verify     # compile + all tests across every module
+mvn install    # + install 1.0-SNAPSHOT into your local repo
+```
+
+elektro-Q also ships a `native` profile for its self-verifying binary — see
+[`elektroq/README.md`](elektroq/README.md).

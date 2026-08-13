@@ -17,6 +17,7 @@
     <modules>
         <module>atchung-core</module>
         <module>elektroq</module>
+        <module>atchung-elektroq</module>
     </modules>
 
     <properties>

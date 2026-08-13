@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>sibarum.atchung</groupId>
+        <artifactId>atchung</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>atchung-elektroq</artifactId>
+
+    <name>Atchung: ElectroQ! Bridge</name>
+    <description>Bridges an in-VM Atchung! event bus to an elektro-Q conduit: publish on a Topic and
+        have it cross processes or the network; author events once as @Message records. Reflection-free,
+        native-image clean.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>sibarum.atchung</groupId>
+            <artifactId>atchung-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>sibarum.elektro.queue</groupId>
+            <artifactId>elektroq-core</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>sibarum.elektro.queue</groupId>
+            <artifactId>elektroq-transport-local</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

@@ -22,6 +22,7 @@
         <module>elektroq-core</module>
         <module>elektroq-codegen</module>
         <module>elektroq-transport-tcp</module>
+        <module>elektroq-transport-uds</module>
         <module>elektroq-transport-local</module>
         <module>elektroq-netcode</module>
         <module>elektroq-example</module>

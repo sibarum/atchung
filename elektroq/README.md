@@ -23,8 +23,9 @@ The model is a triad:
 - **Compile-time codecs.** Annotate a `record`; the processor emits a hand-rolled binary
   `Codec` and a registrar. No hand-written serialization, no schema files.
 - **Transport-agnostic.** Everything transport-specific sits behind a small SPI. Bundled
-  transports: TCP (blocking sockets on virtual threads), an in-VM local transport, and a
-  UDP transport with a layered real-time netcode stack on top.
+  transports: TCP (blocking sockets on virtual threads), Unix domain sockets (the fast
+  same-machine path), an in-VM local transport, and a UDP transport with a layered
+  real-time netcode stack on top.
 - **Versioned by construction.** Stable message ids plus per-field schema versioning let
   peers on different builds interoperate.
 - **Request/reply built in**, with correlation, request timeouts, and disconnect-aware
@@ -47,6 +48,7 @@ The model is a triad:
 | `elektroq-core` | The triad (`Action`/`Conduit`/`Actor`), the wire/codec contract, the message envelope, the transport SPI, and runtime pieces (`DefaultConduit`, `ArrayMessageRegistry`, buffer codecs). JDK-only. |
 | `elektroq-codegen` | The annotation processor that turns `@Message` records into `Codec`s + a registrar. Compile-time only. |
 | `elektroq-transport-tcp` | `TcpTransport` — a TCP implementation of the transport SPI — and the `ElektroTcp` convenience factory. |
+| `elektroq-transport-uds` | `UdsTransport` — a Unix-domain-socket implementation of the SPI (fast same-machine IPC, skips the TCP/IP stack) — and the `ElektroUds` convenience factory. |
 | `elektroq-transport-local` | An in-VM transport that wires two conduits together without sockets — handy for tests and single-process setups. |
 | `elektroq-netcode` | UDP transport (`UdpTransport`/`ElektroUdp`) plus a layered real-time netcode stack: connection, sequencing + acks, independent channels with per-message delivery modes, and a built-in network simulator. |
 | `elektroq-example` | End-to-end demo and the native-image smoke test. |

@@ -9,13 +9,14 @@
     <version>1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
-    <name>Atchung!</name>
-    <description>A realtime, multithreaded, broadcast-and-subscribe event bus for the JVM and GraalVM
-        native-image. Attention! Something happened. Pure Java, no reflection, no native code — every
-        component (input, graphics, GUI) is just a producer/consumer on the bus.</description>
+    <name>Atchung: ElectroQ!</name>
+    <description>A realtime broadcast/subscribe event bus (Atchung!) plus a reflection-free, native-image
+        clean message-passing stack (elektro-Q) for the JVM. Attention! Something happened — in-VM,
+        or across processes and the network. Pure Java, no reflection, no runtime scanning.</description>
 
     <modules>
         <module>atchung-core</module>
+        <module>elektroq</module>
     </modules>
 
     <properties>

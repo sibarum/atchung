@@ -7,8 +7,8 @@ network — with no reflection, no runtime scanning, and a JDK-only core. Messag
 are generated at compile time from annotated records, so the whole stack compiles to a
 native binary with **zero reachability configuration**. It's designed to slot in as an
 add-on for DSLs written with [Truffle](https://www.graalvm.org/latest/graalvm-as-a-platform/language-implementation-framework/),
-and its transport is pluggable — TCP today, with room to grow toward UDP netcode or
-STUN/TURN P2P.
+and its transport is pluggable — TCP, an in-VM local transport, and a UDP netcode stack
+today, with room to grow toward STUN/TURN P2P.
 
 The model is a triad:
 
@@ -22,8 +22,9 @@ The model is a triad:
   and integer ids. Native-image needs no `reflect-config.json`.
 - **Compile-time codecs.** Annotate a `record`; the processor emits a hand-rolled binary
   `Codec` and a registrar. No hand-written serialization, no schema files.
-- **Transport-agnostic.** Everything transport-specific sits behind a small SPI. The
-  bundled TCP transport uses blocking sockets on virtual threads.
+- **Transport-agnostic.** Everything transport-specific sits behind a small SPI. Bundled
+  transports: TCP (blocking sockets on virtual threads), an in-VM local transport, and a
+  UDP transport with a layered real-time netcode stack on top.
 - **Versioned by construction.** Stable message ids plus per-field schema versioning let
   peers on different builds interoperate.
 - **Request/reply built in**, with correlation, request timeouts, and disconnect-aware
@@ -46,6 +47,8 @@ The model is a triad:
 | `elektroq-core` | The triad (`Action`/`Conduit`/`Actor`), the wire/codec contract, the message envelope, the transport SPI, and runtime pieces (`DefaultConduit`, `ArrayMessageRegistry`, buffer codecs). JDK-only. |
 | `elektroq-codegen` | The annotation processor that turns `@Message` records into `Codec`s + a registrar. Compile-time only. |
 | `elektroq-transport-tcp` | `TcpTransport` — a TCP implementation of the transport SPI — and the `ElektroTcp` convenience factory. |
+| `elektroq-transport-local` | An in-VM transport that wires two conduits together without sockets — handy for tests and single-process setups. |
+| `elektroq-netcode` | UDP transport (`UdpTransport`/`ElektroUdp`) plus a layered real-time netcode stack: connection, sequencing + acks, independent channels with per-message delivery modes, and a built-in network simulator. |
 | `elektroq-example` | End-to-end demo and the native-image smoke test. |
 
 ---
@@ -324,9 +327,23 @@ mvn -Pnative verify     # + build and run the native smoke test (GraalVM require
 ## Status & roadmap
 
 Working today: the core triad, compile-time codecs (primitives, `String`, `byte[]`, nested
-messages), the TCP transport, request/reply with timeouts and disconnect handling, and a
-native-image build. Natural next steps: a Truffle add-on, a UDP transport to exercise the
-transport seam, and backpressure controls.
+messages), the TCP and in-VM local transports, request/reply with timeouts and disconnect
+handling, and a native-image build.
+
+The `elektroq-netcode` module adds a UDP transport and a layered real-time stack, built
+out in phases (see [`docs/netcode-design.md`](docs/netcode-design.md)):
+
+- **L0 — `UdpTransport`:** raw datagrams behind the transport SPI (fire-and-forget works
+  immediately), plus `ElektroUdp` convenience wiring and a network simulator
+  (latency/jitter/loss/reorder/dup) for deterministic tests.
+- **L2 — reliability:** packet sequencing, ack bitfields, RTT/loss tracking, and a
+  connection/keepalive layer.
+- **L3 — channels + delivery modes:** independent channels with no cross-stream
+  head-of-line blocking, and a per-message `DeliveryMode` — `UNRELIABLE`,
+  `UNRELIABLE_SEQUENCED`, `RELIABLE_UNORDERED`, or `RELIABLE_ORDERED`.
+
+Natural next steps: fragmentation/reassembly (L4), congestion control (L5), a media
+profile (L6), a Truffle add-on, and backpressure controls.
 
 ## License
 

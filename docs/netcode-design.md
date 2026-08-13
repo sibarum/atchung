@@ -1,6 +1,7 @@
 # elektro-Q netcode: design proposal
 
-**Status:** proposal for review — not yet implemented. Supersedes the one-line "UDP transport"
+**Status:** partially implemented — L0 (UDP transport + simulator), L2 (reliability), and L3
+(channels + delivery modes) have landed; L4–L6 remain proposed. Supersedes the one-line "UDP transport"
 roadmap item with a real plan for a general-purpose real-time netcode framework (authoritative-server
 games, P2P games, voice/video, and ordinary reliable messaging) that stays true to elektro-Q's ethos:
 reflection-free, GraalVM-native-clean, transport-behind-an-SPI.

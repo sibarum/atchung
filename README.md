@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/atchung-elektroq.jpg" alt="Atchung: ElectroQ!" width="620">
+</p>
+
 # Atchung: ElectroQ!
 
 **Attention! Something happened — here, or across the wire.**

@@ -22,6 +22,18 @@ public final class Pump {
     }
 
     /**
+     * Subscribe with pumped delivery and the default policy, {@link Backpressure#FAIL}: events queue into a
+     * bounded mailbox, are delivered on the thread that calls {@link #drain()}, and an overflow stops the
+     * process rather than losing one.
+     *
+     * <p>This is the overload to reach for. Losing events is a decision, and a decision should have to be
+     * written down — so the lossy policies are available, and they are available by naming one.
+     */
+    public <T> Subscription subscribe(Topic<T> topic, Subscriber<T> subscriber, int capacity) {
+        return subscribe(topic, subscriber, capacity, Backpressure.FAIL);
+    }
+
+    /**
      * Subscribe with pumped delivery: events queue into a bounded mailbox and are delivered on the
      * thread that calls {@link #drain()}.
      *

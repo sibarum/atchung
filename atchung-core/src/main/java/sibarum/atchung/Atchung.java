@@ -35,7 +35,29 @@ public final class Atchung {
 
     private final ConcurrentMap<Topic<?>, CopyOnWriteArrayList<Reg<?>>> registry = new ConcurrentHashMap<>();
 
+    /**
+     * What the process does when the bus detects a fault it cannot honestly continue past — see {@link Fatal}.
+     * Process-wide rather than per-bus, because "should this process still be running" is not a question two
+     * buses can answer differently. Volatile and settable once at startup; a test that needs to observe a
+     * fault without dying installs {@link Fatal#THROW} and restores this afterwards.
+     */
+    private static volatile Fatal fatal = Fatal.HALT;
+
     private Atchung() {
+    }
+
+    /** The process-wide fault policy. {@link Fatal#HALT} unless something has said otherwise. */
+    public static Fatal fatal() {
+        return fatal;
+    }
+
+    /**
+     * Install the process-wide fault policy; {@code null} restores {@link Fatal#HALT}. Call it once, at
+     * startup, before any subscription exists — installing a policy that lets faults through, after a fault
+     * has already been survived, tells you nothing about the state you are now in.
+     */
+    public static void onFatal(Fatal policy) {
+        fatal = policy == null ? Fatal.HALT : policy;
     }
 
     /** Create an independent bus. */
@@ -48,7 +70,13 @@ public final class Atchung {
         return Holder.GLOBAL;
     }
 
-    /** Publish {@code event} to every subscriber of {@code topic}. Non-blocking (save a BLOCK mailbox). */
+    /**
+     * Publish {@code event} to every subscriber of {@code topic}. Non-blocking, save a
+     * {@link Backpressure#BLOCK} mailbox that is full — and save a {@link Backpressure#FAIL} one, which
+     * throws {@link MailboxOverflow} here after the {@link Fatal} policy has run. Delivery to the remaining
+     * subscribers does not happen in that case, which is the correct behaviour for a process that has been
+     * told to stop.
+     */
     public <T> void publish(Topic<T> topic, T event) {
         Objects.requireNonNull(topic, "topic");
         CopyOnWriteArrayList<Reg<?>> regs = registry.get(topic);

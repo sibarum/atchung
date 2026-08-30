@@ -18,6 +18,8 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
 
     private final ArrayDeque<T> queue;
     private final Object lock = new Object();
+    /** How many events have been handed to the subscriber, for {@link MailboxOverflow}. Guarded by the lock. */
+    private long delivered;
 
     PumpedReg(Topic<T> topic, Subscriber<T> subscriber, int capacity, Backpressure backpressure) {
         super(topic);
@@ -34,6 +36,18 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     void doDeliver(T event) {
         synchronized (lock) {
             switch (backpressure) {
+                case FAIL -> {
+                    if (queue.size() >= capacity) {
+                        // Outside the lock would be tidier and is wrong: the Fatal policy does not return in
+                        // the default, so releasing the lock first would leave a publisher that is about to
+                        // halt racing a drain that is about to succeed, and the report would name a mailbox
+                        // that had just been emptied. The state described has to be the state observed.
+                        MailboxOverflow overflow = new MailboxOverflow(topic(), capacity, delivered);
+                        Atchung.fatal().fault(overflow);
+                        throw overflow;
+                    }
+                    queue.addLast(event);
+                }
                 case DROP_OLDEST -> {
                     while (queue.size() >= capacity) {
                         queue.pollFirst();
@@ -83,6 +97,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
             }
             batch = new ArrayList<>(queue);
             queue.clear();
+            delivered += batch.size();
             lock.notifyAll(); // wake any BLOCK publisher waiting on space
         }
         for (T event : batch) {

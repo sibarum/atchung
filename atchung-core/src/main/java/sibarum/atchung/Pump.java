@@ -42,11 +42,27 @@ public final class Pump {
      */
     public <T> Subscription subscribe(Topic<T> topic, Subscriber<T> subscriber,
                                       int capacity, Backpressure backpressure) {
+        return subscribe(topic, subscriber, capacity, backpressure, null);
+    }
+
+    /**
+     * Subscribe with pumped delivery and a {@link Fold}: the mailbox holds cells rather than events, so a write
+     * supersedes the queued write to the same cell instead of queueing beside it.
+     *
+     * <p>The bound then counts <em>cells</em>, which is the number worth bounding — how much has changed since
+     * the last drain, rather than how many times the producer said so. Read {@link Fold} before using this: it
+     * carries the condition on the consumer that makes folding lossless, and a channel that does not meet it
+     * must not fold.
+     *
+     * @param fold which cell each event writes, or {@code null} for an ordinary mailbox
+     */
+    public <T> Subscription subscribe(Topic<T> topic, Subscriber<T> subscriber,
+                                      int capacity, Backpressure backpressure, Fold<T> fold) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(subscriber, "subscriber");
         Objects.requireNonNull(backpressure, "backpressure");
 
-        PumpedReg<T> reg = new PumpedReg<>(topic, subscriber, capacity, backpressure);
+        PumpedReg<T> reg = new PumpedReg<>(topic, subscriber, capacity, backpressure, fold);
         regs.add(reg);
         Subscription busSub = bus.register(reg);
         return new PumpSubscription(reg, busSub);

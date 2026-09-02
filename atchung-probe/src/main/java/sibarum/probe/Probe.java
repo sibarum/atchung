@@ -1,6 +1,7 @@
 package sibarum.probe;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -27,6 +28,7 @@ import java.util.Locale;
  * probe.trace=true             one line per event as it happens, not just the rollup
  * probe.every=1000             also print a rollup every N milliseconds
  * probe.slow=8                 always print any span over N milliseconds, whatever the mode
+ * probe.format=csv             emit the trace as a correlation CSV (implies trace; see below)
  * probe.stacks=true            record allocation stacks in the resource ledger
  * probe.top=20                 rows per lane in the rollup (default 12)
  * </pre>
@@ -77,6 +79,25 @@ public final class Probe {
     /** Emit a line per event as well as accumulating it. */
     static final boolean TRACE;
 
+    /**
+     * Emit those lines as a correlation CSV rather than as aligned text.
+     *
+     * <p>The format a run is <em>read</em> in, as opposed to watched in. One file, one writer, one row per
+     * event, sorted on the monotonic clock and hunted for gaps — which is the whole reason this exists rather
+     * than a directory of per-subsystem logs. Parallel writers are what make correlation lie: separate buffers
+     * flush at different times, so the order on disk is not the order that happened. One sink makes the file's
+     * own order the truth.
+     *
+     * <p>Implies {@link #TRACE}. A correlation log with only the slow spans in it is not one.
+     */
+    static final boolean CSV;
+
+    /**
+     * The row number, so that loss is detectable. Not the sort key — {@code t_mono_ns} is — but a gap in this
+     * is the difference between "nothing happened here" and "we did not hear about it".
+     */
+    private static final java.util.concurrent.atomic.AtomicLong SEQ = new java.util.concurrent.atomic.AtomicLong();
+
     /** Spans at or over this many nanoseconds are printed the moment they close, in any mode. 0 disables. */
     static final long SLOW_NANOS;
 
@@ -92,13 +113,17 @@ public final class Probe {
         ON = on;
         if (!on) {
             TRACE = false;
+            CSV = false;
             SLOW_NANOS = 0L;
             TOP = 0;
             SINK = null;
             LEDGER = null;
         } else {
             selectLanes(spec);
-            TRACE = flag("probe.trace", "PROBE_TRACE");
+            CSV = setting("probe.format", "PROBE_FORMAT", "text").equalsIgnoreCase("csv");
+            // csv implies trace: the format exists to be read afterwards, and a correlation log holding only
+            // the spans that happened to be slow is not one.
+            TRACE = CSV || flag("probe.trace", "PROBE_TRACE");
             SLOW_NANOS = number("probe.slow", "PROBE_SLOW", 0L) * 1_000_000L;
             TOP = (int) number("probe.top", "PROBE_TOP", 12L);
             String out = setting("probe.out", "PROBE_OUT", "");
@@ -160,7 +185,7 @@ public final class Probe {
         }
         counter(lane, name).bump(n);
         if (TRACE) {
-            SINK.line(prefix(lane) + name + " " + n);
+            emit(lane, name, Long.toString(n));
         }
     }
 
@@ -174,7 +199,7 @@ public final class Probe {
         }
         counter(lane, name).bump(1L);
         if (TRACE) {
-            SINK.line(prefix(lane) + name + (detail == null || detail.isEmpty() ? "" : " " + detail));
+            emit(lane, name, detail);
         }
     }
 
@@ -189,7 +214,7 @@ public final class Probe {
         if (ON && lane.on) {
             LEDGER.opened(lane, kind, what);
             if (TRACE) {
-                SINK.line(prefix(lane) + "open " + kind + " #" + System.identityHashCode(what));
+                emit(lane, "open", kind + " #" + System.identityHashCode(what));
             }
         }
     }
@@ -199,14 +224,22 @@ public final class Probe {
         if (ON && lane.on) {
             LEDGER.closed(kind, what);
             if (TRACE) {
-                SINK.line(prefix(lane) + "close " + kind + " #" + System.identityHashCode(what));
+                emit(lane, "close", kind + " #" + System.identityHashCode(what));
             }
         }
     }
 
     /** Print a rollup now. Safe from anywhere, including a debugger or a keyboard shortcut. */
     public static void dump() {
-        if (ON) {
+        if (!ON) {
+            return;
+        }
+        if (CSV) {
+            // The rollup is a table for a person to read, and this sink is a table for a program to read. Put
+            // it in the file and every consumer needs a rule for skipping it; put it on stderr and the run
+            // still prints its summary where a person is already looking.
+            System.err.print(report());
+        } else {
             SINK.block(report());
         }
     }
@@ -221,9 +254,9 @@ public final class Probe {
     /** Called by {@link Zone#close}: trace the span, or print it if it blew the {@code probe.slow} threshold. */
     static void slow(Tally tally, long nanos) {
         if (TRACE) {
-            SINK.line(prefix(tally.lane) + tally.name + " " + dur(nanos));
+            emit(tally.lane, tally.name, dur(nanos).trim());
         } else if (SLOW_NANOS > 0 && nanos >= SLOW_NANOS && !tally.idle) {
-            SINK.line(prefix(tally.lane) + "SLOW " + tally.name + " " + dur(nanos));
+            emit(tally.lane, "SLOW " + tally.name, dur(nanos).trim());
         }
     }
 
@@ -238,6 +271,68 @@ public final class Probe {
     private static String prefix(Lane lane) {
         return String.format(Locale.ROOT, "%9s %-6s [%s] ",
                 dur(System.nanoTime() - ORIGIN), lane.key(), Thread.currentThread().getName());
+    }
+
+    // --- emission ----------------------------------------------------------
+
+    /**
+     * One traced event, in whichever format this run asked for. Every trace line in this class goes through
+     * here, which is the point: a second place that formats an event is a second format to keep in step.
+     */
+    private static void emit(Lane lane, String kind, String detail) {
+        SINK.line(CSV ? csv(lane, kind, detail)
+                : prefix(lane) + kind + (detail == null || detail.isEmpty() ? "" : " " + detail));
+    }
+
+    /**
+     * One row of the correlation log.
+     *
+     * <p><b>{@code seq} is not the sort key</b> — {@code t_mono_ns} is. It is there so that loss is
+     * <em>detectable</em>: a run is read by sorting on time and hunting for gaps, and a gap that is a dropped
+     * line looks exactly like a gap that is a stall unless the numbering says which it was. It also breaks
+     * ties when two threads land in the same nanosecond.
+     *
+     * <p><b>Two clocks, deliberately.</b> {@code t_mono_ns} is monotonic, and is what durations and ordering
+     * are computed from; a wall clock can step sideways and would sort two events into an order that never
+     * happened. {@code t_wall} is for people, and for joining this file against anything outside the process.
+     *
+     * <p>{@code thread} and {@code lane} say who and where, {@code kind} says what, and {@code detail} is the
+     * producer's own — always last, so a naive split on commas keeps working when it contains one.
+     */
+    private static String csv(Lane lane, String kind, String detail) {
+        StringBuilder sb = new StringBuilder(96);
+        sb.append(SEQ.incrementAndGet()).append(',')
+                .append(System.nanoTime() - ORIGIN).append(',')
+                .append(Instant.now()).append(',');
+        field(sb, Thread.currentThread().getName()).append(',');
+        field(sb, lane.key()).append(',');
+        field(sb, kind).append(',');
+        field(sb, detail == null ? "" : detail);
+        return sb.toString();
+    }
+
+    /**
+     * One CSV field, quoted when it has to be, and <b>never spanning a line</b>.
+     *
+     * <p>The newline handling is the load-bearing part. RFC 4180 permits a quoted field to contain a raw
+     * newline, and one stack trace written that way ends the file's usefulness: {@code sort}, {@code grep -n}
+     * and {@code awk} stop describing events and start describing fragments of them. One event, one physical
+     * line, always — the format's whole value is that line tools work on it.
+     */
+    private static StringBuilder field(StringBuilder sb, String v) {
+        String s = v.replace("\r\n", " ").replace('\n', ' ').replace('\r', ' ');
+        if (s.indexOf(',') < 0 && s.indexOf('"') < 0) {
+            return sb.append(s);
+        }
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"') {
+                sb.append('"');           // RFC 4180: a quote inside a quoted field is doubled
+            }
+            sb.append(c);
+        }
+        return sb.append('"');
     }
 
     // --- configuration -----------------------------------------------------
@@ -315,9 +410,17 @@ public final class Probe {
                 on.append(on.isEmpty() ? "" : " ").append(lane.key());
             }
         }
-        SINK.line("probe: lanes [" + on + "]" + (TRACE ? " tracing" : "")
+        String banner = "probe: lanes [" + on + "]" + (TRACE ? " tracing" : "")
                 + (SLOW_NANOS > 0 ? " slow>" + SLOW_NANOS / 1_000_000 + "ms" : "")
-                + (SINK.path() == null ? "" : " -> " + SINK.path().toAbsolutePath()));
+                + (SINK.path() == null ? "" : " -> " + SINK.path().toAbsolutePath());
+        if (CSV) {
+            // The data file holds rows and nothing else. A banner in it is one line every consumer has to know
+            // to skip, and the header is the one line they can all be told about instead.
+            System.err.println(banner + " (csv)");
+            SINK.line("seq,t_mono_ns,t_wall,thread,lane,kind,detail");
+        } else {
+            SINK.line(banner);
+        }
     }
 
     /**

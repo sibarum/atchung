@@ -39,7 +39,32 @@
                         <probe.out>target/probe-test.log</probe.out>
                         <probe.stacks>true</probe.stacks>
                     </systemPropertyVariables>
+                    <excludes>
+                        <exclude>**/ProbeCsvTest.java</exclude>
+                    </excludes>
                 </configuration>
+                <executions>
+                    <!-- The format is decided in the same static initialiser, so one JVM can only ever be one
+                         format. The CSV tests therefore need a JVM of their own, started in that format and
+                         writing its own file - which is again the path a real run takes. -->
+                    <execution>
+                        <id>csv</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <probe>all</probe>
+                                <probe.format>csv</probe.format>
+                                <probe.out>target/probe-test.csv</probe.out>
+                            </systemPropertyVariables>
+                            <excludes combine.self="override"/>
+                            <includes>
+                                <include>**/ProbeCsvTest.java</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

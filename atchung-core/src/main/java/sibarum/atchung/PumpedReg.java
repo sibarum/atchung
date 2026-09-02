@@ -6,6 +6,9 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 
+import sibarum.probe.Lane;
+import sibarum.probe.Probe;
+
 /**
  * A pumped subscriber's bounded mailbox. {@link #deliver(Object)} runs on publisher threads and only
  * enqueues (applying the {@link Backpressure} policy); {@link #drain()} runs on the pump's owner
@@ -41,6 +44,19 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     private static final class Edge {
     }
 
+    /**
+     * The probe's names for this mailbox, built once at subscription time and null when not profiling.
+     *
+     * <p>A mailbox is exactly where a "driver overload" complaint turns into a number: the peak depth says
+     * how far behind the consumer fell, the drop count says whether that cost anything, and the batch size
+     * says how lumpy the drain is. All three are per subscription, so the label is per subscription too —
+     * composing it on the enqueue path, which runs on every publish, would be the profiler paying for itself
+     * out of the budget it is measuring.
+     */
+    private final String depthName;
+    private final String dropName;
+    private final String batchName;
+
     PumpedReg(Topic<T> topic, Subscriber<T> subscriber, int capacity, Backpressure backpressure, Fold<T> fold) {
         super(topic);
         if (capacity < 1) {
@@ -53,6 +69,9 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
         int initial = Math.min(this.capacity, 64);
         this.queue = fold == null ? new ArrayDeque<>(initial) : null;
         this.folded = fold == null ? null : new LinkedHashMap<>(initial);
+        this.depthName = Probe.ON ? topic.name() + " depth" : null;
+        this.dropName = Probe.ON ? topic.name() + " dropped" : null;
+        this.batchName = Probe.ON ? topic.name() + " batch" : null;
     }
 
     @Override
@@ -79,15 +98,23 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                 case DROP_OLDEST -> {
                     while (!supersedes && queued() >= capacity) {
                         evictOldest();
+                        // A lossy policy is a decision, and this is the line that tells you it was taken. The
+                        // policy is not the bug; a policy silently firing ten thousand times is.
+                        Probe.count(Lane.BUS, dropName);
                     }
                     enqueue(event, cell);
                 }
                 case DROP_NEWEST -> {
                     if (supersedes || queued() < capacity) {
                         enqueue(event, cell);
+                    } else {
+                        Probe.count(Lane.BUS, dropName);
                     }
                 }
                 case COALESCE_LATEST -> {
+                    if (Probe.ON && queued() > 0) {
+                        Probe.count(Lane.BUS, dropName, queued());
+                    }
                     clearQueue();
                     enqueue(event, cell);
                 }
@@ -107,6 +134,9 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                     }
                 }
             }
+            // The peak of this counter is the number that matters: a mailbox whose depth averaged 2 and once
+            // reached its capacity is a mailbox that was one publish away from dropping, or did.
+            Probe.count(Lane.BUS, depthName, queued());
         }
     }
 
@@ -169,6 +199,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
             delivered += batch.size();
             lock.notifyAll(); // wake any BLOCK publisher waiting on space
         }
+        Probe.count(Lane.BUS, batchName, batch.size());
         for (T event : batch) {
             subscriber.on(event);
         }

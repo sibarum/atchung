@@ -6,6 +6,10 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 
+import sibarum.probe.Lane;
+import sibarum.probe.Probe;
+import sibarum.probe.Zone;
+
 /**
  * A realtime, multithreaded broadcast/subscribe event bus. Publish an event on a {@link Topic} and
  * every subscriber to that topic is notified. <em>Attention! Something happened.</em>
@@ -81,12 +85,23 @@ public final class Atchung {
         Objects.requireNonNull(topic, "topic");
         CopyOnWriteArrayList<Reg<?>> regs = registry.get(topic);
         if (regs == null) {
+            // Counted even though nothing happens: a publish with no subscriber is the shape of a whole class
+            // of "the event never arrived" bug, and it is invisible from either end without this line. It
+            // lands in the probe's counter table under the plain topic name, while a delivered publish lands
+            // in the span table under the same name — so the two are told apart by which table they are in,
+            // and neither call site has to build a string on the hottest path in the stack to say which.
+            Probe.count(Lane.BUS, topic.name());
             return;
         }
-        for (Reg<?> reg : regs) {
-            @SuppressWarnings("unchecked")
-            Reg<T> typed = (Reg<T>) reg;
-            typed.deliver(event);
+        // The span covers the whole fan-out, so inline subscribers — which run right here, on this thread —
+        // are inside it. That is deliberate: an inline handler's cost is a publisher's cost, and the report
+        // should say so rather than attributing it to whoever happened to call publish.
+        try (Zone z = Probe.zone(Lane.BUS, topic.name())) {
+            for (Reg<?> reg : regs) {
+                @SuppressWarnings("unchecked")
+                Reg<T> typed = (Reg<T>) reg;
+                typed.deliver(event);
+            }
         }
     }
 

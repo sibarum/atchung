@@ -3,6 +3,10 @@ package sibarum.atchung;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import sibarum.probe.Lane;
+import sibarum.probe.Probe;
+import sibarum.probe.Zone;
+
 /**
  * A per-thread drain point for pumped subscriptions. Register handlers with {@link #subscribe}, then
  * call {@link #drain()} on one owner thread (e.g. a render/UI thread, once per frame) to deliver all
@@ -74,11 +78,17 @@ public final class Pump {
      * @return the total number of events delivered this drain
      */
     public int drain() {
-        int delivered = 0;
-        for (PumpedReg<?> reg : regs) {
-            delivered += reg.drain();
+        // One span for the whole drain, on the thread that owns it — which for a GUI is the render thread,
+        // once per frame. A frame that ran long and a drain that ran long are then two rows in the same
+        // table, and which contains which is answered by the self-time column rather than by guesswork.
+        try (Zone z = Probe.zone(Lane.BUS, "pump drain")) {
+            int delivered = 0;
+            for (PumpedReg<?> reg : regs) {
+                delivered += reg.drain();
+            }
+            Probe.count(Lane.BUS, "pump delivered", delivered);
+            return delivered;
         }
-        return delivered;
     }
 
     /** @return whether any subscription still holds queued events. */

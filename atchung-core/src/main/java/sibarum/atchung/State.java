@@ -14,6 +14,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 
+import sibarum.probe.Lane;
+import sibarum.probe.Probe;
+import sibarum.probe.Zone;
+
 /**
  * A synchronized state cell: a single producer owns a value; consumers read coherent, immutable,
  * versioned snapshots. The alternative broadcast shape to {@link Topic} events — instead of "what
@@ -80,18 +84,23 @@ public final class State<T> {
         if (!declared.contains(committer)) {
             throw new IllegalArgumentException("mutation not declared on this State: " + committer.name());
         }
-        Versioned<T> next;
-        while (true) {
-            Versioned<T> prev = current.get();
-            T value = committer.applyTo(prev.value(), payload);
-            next = new Versioned<>(value, prev.version() + 1, System.nanoTime());
-            if (current.compareAndSet(prev, next)) {
-                break;
+        // The span covers the CAS loop and the listener fan-out both, because from the committing thread's
+        // point of view they are one call and one cost. Listeners run on this thread.
+        try (Zone z = Probe.zone(Lane.STATE, committer.name())) {
+            Versioned<T> next;
+            while (true) {
+                Versioned<T> prev = current.get();
+                T value = committer.applyTo(prev.value(), payload);
+                next = new Versioned<>(value, prev.version() + 1, System.nanoTime());
+                if (current.compareAndSet(prev, next)) {
+                    break;
+                }
+                Probe.count(Lane.STATE, committer.retryName);
             }
-        }
-        record(next);
-        for (Reg<T> reg : listeners) {
-            reg.deliver(next);
+            record(next);
+            for (Reg<T> reg : listeners) {
+                reg.deliver(next);
+            }
         }
     }
 

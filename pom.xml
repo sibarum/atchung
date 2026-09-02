@@ -15,6 +15,7 @@
         or across processes and the network. Pure Java, no reflection, no runtime scanning.</description>
 
     <modules>
+        <module>atchung-probe</module>
         <module>atchung-core</module>
         <module>elektroq</module>
         <module>atchung-elektroq</module>
@@ -32,6 +33,11 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>sibarum.atchung</groupId>
+                <artifactId>atchung-probe</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>sibarum.atchung</groupId>
                 <artifactId>atchung-core</artifactId>

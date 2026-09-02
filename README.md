@@ -24,6 +24,7 @@ delivery is opt-in and lives entirely in elektro-Q and the bridge — the bus co
 | Module | What it provides |
 |---|---|
 | `atchung-core` | The event bus: `Topic`, `Atchung`, inline/async/pumped delivery, `Backpressure`, pause/resume, and the `State<T>` synchronization primitive. Pure Java, no dependencies. |
+| `atchung-probe` | The stack-wide profiling seam: `Probe`, `Lane`, spans, counters and a resource ledger. Off unless asked, free when off, and dependency-free so any layer can take it without taking the bus. See [`docs/probe.md`](docs/probe.md). |
 | `atchung-elektroq` | `ElektroBridge` — wires an `Atchung` bus to an elektro-Q `Conduit`, both directions, with loop prevention. |
 | `elektroq/` | The cross-process stack (own aggregator; coordinates `sibarum.elektro.queue:*`). See [`elektroq/README.md`](elektroq/README.md) for the full tutorial. Modules: `elektroq-core`, `elektroq-codegen`, `elektroq-transport-tcp`, `elektroq-transport-local`, `elektroq-netcode`, `elektroq-example`. |
 

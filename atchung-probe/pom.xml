@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>sibarum.atchung</groupId>
+        <artifactId>atchung</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>atchung-probe</artifactId>
+
+    <name>Atchung! Probe</name>
+    <description>The stack-wide profiling seam: verbose on demand, free when off. Pure Java, no dependencies,
+        no reflection, native-image clean — so a module may depend on the probe without depending on the bus,
+        which is what lets the graphics and shader layers carry instrumentation at all.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- The probe decides whether it is on once, in a static initialiser, from a property that must
+                 exist before the class is loaded. So the tests get a JVM that was started profiling, writing
+                 to a file they can read back — which is the same path a real profiling run takes. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <probe>all</probe>
+                        <probe.out>target/probe-test.log</probe.out>
+                        <probe.stacks>true</probe.stacks>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

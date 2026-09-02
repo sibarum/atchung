@@ -241,7 +241,17 @@ public final class CsvView {
         return missing == 0 ? "" : "csvview: " + missing + " row(s) missing from this log; seq has gaps";
     }
 
-    static List<Row> filter(List<Row> rows, String lanes, String kind, String thread, String grep) {
+    /**
+     * The rows matching every criterion given; a {@code null} criterion is not applied.
+     *
+     * <p>Combined rather than alternative, because an investigation narrows: each option is an "and". Matching
+     * is case-insensitive substring except for {@code lanes}, which is an exact comma-separated set — a lane is
+     * a closed vocabulary and a partial match there would silently widen the answer.
+     *
+     * <p>Public because reading a run back is not only this command's job: a test that asserts what its own run
+     * recorded is doing the same thing, and would otherwise reimplement it slightly differently.
+     */
+    public static List<Row> filter(List<Row> rows, String lanes, String kind, String thread, String grep) {
         List<String> wanted = lanes == null ? List.of() : List.of(lanes.toLowerCase(Locale.ROOT).split(","));
         List<Row> kept = new ArrayList<>();
         for (Row r : rows) {

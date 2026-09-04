@@ -166,21 +166,54 @@ public final class UdsTransport implements Transport {
 
     // --- internals --------------------------------------------------------------
 
+    /**
+     * Accepts until the transport is closed.
+     *
+     * <p>A listener that faults while the transport still believes it is open is the one failure here that
+     * nothing downstream can infer: the socket file is still on disk, {@code state()} still says open, and the
+     * refusal lands at whichever client dials next. It is reported rather than returned from quietly.
+     */
     private void acceptLoop() {
         ServerSocketChannel channel = serverChannel;
         while (!closed) {
             try {
                 register(channel.accept());
             } catch (IOException e) {
-                return; // listener closed or faulted; stop accepting
+                if (!closed) {
+                    fault("listener on " + socketPath + " faulted; no further connections will be accepted", e);
+                }
+                return;
+            } catch (RuntimeException e) {
+                // register() runs peerListener.onConnected inline, so application code shares this thread.
+                // Letting it through would end the accept loop for good — and end it inside a submitted task,
+                // where the throwable goes into a Future nobody reads. One peer's registration failing is not
+                // a reason to stop serving the rest.
+                fault("registering an accepted connection failed", e);
             }
         }
     }
 
+    /**
+     * Takes a connected channel into service: registered, announced, and then read from.
+     *
+     * <p>The announcement is application code, and a throw from it used to leave this peer registered and
+     * never served: nothing submits its read loop, so no {@code readLoop} finally-block ever runs to strike it
+     * off. It would sit in the map holding a channel nobody reads, a broadcast would write into it, and the
+     * first one to fill the peer's receive buffer would block {@link #send} for every other peer behind that
+     * connection's write lock. So the registration is undone before the fault leaves here — a peer the
+     * application refused to accept is not a peer. {@code onDisconnected} is deliberately not called:
+     * {@code onConnected} never returned, so there is no connection the application believes in.
+     */
     private void register(SocketChannel channel) throws IOException {
         Connection connection = new Connection(new PeerId(nextPeerId.getAndIncrement()), channel);
         connections.put(connection.peer.handle(), connection);
-        peerListener.onConnected(connection.peer);
+        try {
+            peerListener.onConnected(connection.peer);
+        } catch (RuntimeException e) {
+            connections.remove(connection.peer.handle());
+            connection.closeQuietly();
+            throw e;
+        }
         threads.submit(() -> readLoop(connection));
     }
 
@@ -194,15 +227,51 @@ public final class UdsTransport implements Transport {
                 }
                 byte[] frame = new byte[length];
                 in.readFully(frame);
-                frameListener.onFrame(connection.peer, ByteBuffer.wrap(frame));
+                dispatch(connection, frame);
             }
         } catch (EOFException eof) {
             // Peer closed the connection cleanly.
-        } catch (IOException | ElektroException e) {
-            // Connection faulted; fall through to disconnect.
+        } catch (IOException e) {
+            if (!closed) {
+                fault("connection to peer " + connection.peer.handle() + " faulted", e);
+            }
+        } catch (ElektroException e) {
+            // A framing fault: the length prefix did not describe a frame, so the stream position is no longer
+            // trustworthy and this connection cannot be resynchronised. Unlike a listener fault it is terminal.
+            fault("framing error on peer " + connection.peer.handle() + "; dropping the connection", e);
         } finally {
             disconnect(connection);
         }
+    }
+
+    /**
+     * Hands one frame to the listener, absorbing a fault in it.
+     *
+     * <p>The frame has already been consumed in full by the time this runs — framing is the length prefix and
+     * nothing else, decided here and independent of what the payload turns out to be — so the stream is still
+     * in sync and a listener that throws has not cost us the connection. Reported and skipped, therefore,
+     * rather than escaping into {@code threads.submit} where it would be filed in an unread {@code Future} and
+     * surface only as a peer that disconnected for no stated reason.
+     */
+    private void dispatch(Connection connection, byte[] frame) {
+        try {
+            frameListener.onFrame(connection.peer, ByteBuffer.wrap(frame));
+        } catch (RuntimeException e) {
+            fault("frame listener failed on a " + frame.length + "-byte frame from peer "
+                    + connection.peer.handle() + "; frame dropped", e);
+        }
+    }
+
+    /**
+     * The last-resort report for a fault on a thread with no caller to throw to.
+     *
+     * <p>stderr because this module has no probe and no logger, and a fault nobody hears about is the failure
+     * this reporting exists to prevent — see {@code Fatal} in atchung-core for the same argument at more
+     * length. A transport that grows a diagnostic seam should route these through it instead.
+     */
+    private static void fault(String what, Throwable cause) {
+        System.err.println("[elektroq] uds: " + what + ": " + cause);
+        cause.printStackTrace(System.err);
     }
 
     private void disconnect(Connection connection) {

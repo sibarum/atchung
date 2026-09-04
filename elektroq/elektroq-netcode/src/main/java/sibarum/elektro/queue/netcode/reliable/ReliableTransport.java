@@ -252,22 +252,63 @@ public final class ReliableTransport implements Transport {
         }
     }
 
+    /**
+     * The heartbeat: timeouts, handshake retransmits, retransmits and keepalives, once per keepalive period.
+     *
+     * <p><b>This method must not throw.</b> It runs under {@code scheduleAtFixedRate}, which cancels a periodic
+     * task on its first uncaught throwable and files that throwable in a {@code Future} nobody reads. Everything
+     * this transport does on its own initiative happens here, so a single escape would stop keepalives,
+     * retransmits and timeout detection for <em>every</em> peer, permanently and without a word — sessions would
+     * stay {@code established} for ever, and no reliable message would ever be retransmitted again.
+     *
+     * <p>The throw is not hypothetical: {@link #flush} and {@link #sendPacket} call {@code delegate.send}, which
+     * throws {@link ElektroException} by design when a peer has gone, and {@link #teardown} calls a
+     * {@code PeerListener} that is application code. So each session is ticked inside its own guard: one peer's
+     * failure costs that peer's tick and is reported, and the heartbeat survives to serve the others.
+     */
     private void tick() {
         long now = System.nanoTime();
         for (Session s : sessions.values()) {
-            if (now - s.lastReceivedNanos > timeoutNanos) {
-                teardown(s.peer, true); // gone silent past the timeout
-            } else if (!s.established && role == Role.CLIENT) {
-                if (now - s.lastSentNanos > keepaliveNanos) {
-                    sendPacket(s, PacketType.CONNECT, EMPTY); // retransmit handshake until accepted
-                }
-            } else if (s.established) {
-                flush(s); // (re)send any queued or overdue reliable messages
-                if (System.nanoTime() - s.lastSentNanos > keepaliveNanos) {
-                    sendPacket(s, PacketType.KEEPALIVE, EMPTY); // stay alive + carry fresh acks
+            try {
+                tick(s, now);
+            } catch (RuntimeException e) {
+                // A session whose tick cannot complete is not being kept alive, so leaving it in the map would
+                // be a connection that looks established and is not. Tear it down: a reported disconnect is a
+                // signal the application can act on, where a silently stalled session is not.
+                fault("tick failed for peer " + s.peer.handle() + "; tearing the session down", e);
+                try {
+                    teardown(s.peer, true);
+                } catch (RuntimeException nested) {
+                    fault("tearing down peer " + s.peer.handle() + " also failed", nested);
                 }
             }
         }
+    }
+
+    private void tick(Session s, long now) {
+        if (now - s.lastReceivedNanos > timeoutNanos) {
+            teardown(s.peer, true); // gone silent past the timeout
+        } else if (!s.established && role == Role.CLIENT) {
+            if (now - s.lastSentNanos > keepaliveNanos) {
+                sendPacket(s, PacketType.CONNECT, EMPTY); // retransmit handshake until accepted
+            }
+        } else if (s.established) {
+            flush(s); // (re)send any queued or overdue reliable messages
+            if (System.nanoTime() - s.lastSentNanos > keepaliveNanos) {
+                sendPacket(s, PacketType.KEEPALIVE, EMPTY); // stay alive + carry fresh acks
+            }
+        }
+    }
+
+    /**
+     * The last-resort report for a fault on the ticker, which has no caller to throw to.
+     *
+     * <p>stderr because this module has no probe and no logger, and a fault nobody hears about is the failure
+     * this reporting exists to prevent — see {@code Fatal} in atchung-core for the same argument at more length.
+     */
+    private static void fault(String what, Throwable cause) {
+        System.err.println("[elektroq] netcode: " + what + ": " + cause);
+        cause.printStackTrace(System.err);
     }
 
     private void enqueue(Session s, int channelId, DeliveryMode mode, byte[] payload) {

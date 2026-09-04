@@ -24,9 +24,9 @@ delivery is opt-in and lives entirely in elektro-Q and the bridge — the bus co
 | Module | What it provides |
 |---|---|
 | `atchung-core` | The event bus: `Topic`, `Atchung`, inline/async/pumped delivery, `Backpressure`, pause/resume, and the `State<T>` synchronization primitive. Pure Java, no dependencies. |
-| `atchung-probe` | The stack-wide profiling seam: `Probe`, `Lane`, spans, counters and a resource ledger. Off unless asked, free when off, and dependency-free so any layer can take it without taking the bus. See [`docs/probe.md`](docs/probe.md). |
+| `atchung-probe` | The stack-wide profiling seam: `Probe`, `Lane`, spans, counters and a resource ledger. Off unless asked, free when off, and dependency-free so any layer can take it without taking the bus. The trace is aligned text for a person watching a run, or a correlation CSV (`probe.format=csv`) for a program reading one afterwards — `CsvView` reads that file back and hunts it for stalls. See [`docs/probe.md`](docs/probe.md). |
 | `atchung-elektroq` | `ElektroBridge` — wires an `Atchung` bus to an elektro-Q `Conduit`, both directions, with loop prevention. |
-| `elektroq/` | The cross-process stack (own aggregator; coordinates `sibarum.elektro.queue:*`). See [`elektroq/README.md`](elektroq/README.md) for the full tutorial. Modules: `elektroq-core`, `elektroq-codegen`, `elektroq-transport-tcp`, `elektroq-transport-local`, `elektroq-netcode`, `elektroq-example`. |
+| `elektroq/` | The cross-process stack (own aggregator; coordinates `sibarum.elektro.queue:*`). See [`elektroq/README.md`](elektroq/README.md) for the full tutorial. Modules: `elektroq-core`, `elektroq-codegen`, `elektroq-transport-tcp`, `elektroq-transport-uds`, `elektroq-transport-local`, `elektroq-netcode`, `elektroq-example`. |
 
 ## Which layer do I want?
 
@@ -53,8 +53,12 @@ ui.drain();                                      // deliver queued events on the
 ```
 
 Publishing never blocks (save a `BLOCK` mailbox); a full pumped mailbox is resolved by
-`Backpressure` (`DROP_OLDEST`, `DROP_NEWEST`, `COALESCE_LATEST`, `BLOCK`). Any `Subscription` can
-`pause()`/`resume()` (lossy — events during a pause are dropped, not buffered).
+`Backpressure` — `DROP_OLDEST`, `DROP_NEWEST`, `COALESCE_LATEST`, `BLOCK`, or `FAIL`, which stops the
+process through the `Fatal` policy rather than shed an event a subscription said it would rather stop
+than lose. A pumped mailbox may also take a `Fold` and hold *cells* rather than events: a write
+supersedes whatever is queued for the same cell, while an event naming no cell is an edge and queues
+on its own. Any `Subscription` can `pause()`/`resume()` (lossy — events during a pause are dropped,
+not buffered).
 
 **Events vs. state.** Events answer *"what happened."* `State<T>` answers *"what is true now"* — one
 producer commits declared mutations, consumers read coherent immutable versions (lock-free), react

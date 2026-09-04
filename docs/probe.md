@@ -29,6 +29,7 @@ PROBE=all                    # the same thing, and the form a native binary unde
 | `probe.trace` | `PROBE_TRACE` | one line per event as it happens, not just the rollup |
 | `probe.every` | `PROBE_EVERY` | also print a rollup every N milliseconds |
 | `probe.slow` | `PROBE_SLOW` | print any span over N milliseconds the moment it closes |
+| `probe.format` | `PROBE_FORMAT` | `text` (default) or `csv` — the correlation log, [below](#reading-a-run-back-the-correlation-csv). Implies `probe.trace` |
 | `probe.stacks` | `PROBE_STACKS` | record allocation stacks in the resource ledger |
 | `probe.top` | `PROBE_TOP` | rows per lane in the rollup (default 12) |
 
@@ -106,6 +107,105 @@ each outstanding entry carries the stack that allocated it.
 The ledger holds a **strong** reference to everything registered. That is deliberate: a weak one would let the
 object under investigation vanish before it could be named, and "something leaked but it has been collected"
 is not a report.
+
+## Reading a run back: the correlation CSV
+
+A log a program reads is not a log a person watches, and the two want opposite things: columns that line up,
+or fields that split. `probe.format=csv` emits the same events as one row per line.
+
+```bash
+-Dprobe=all -Dprobe.format=csv -Dprobe.out=run.csv
+```
+
+`csv` implies `probe.trace`, because a correlation log holding only the spans that happened to be slow is not
+one. The file opens with its header and then holds rows and nothing else:
+
+```
+seq,t_mono_ns,t_wall,thread,lane,kind,detail
+1,4185700,2026-09-02T04:31:07.882145Z,main,bus,input depth,3
+2,4213900,2026-09-02T04:31:07.882173Z,Loop,frame,frame.present,#41
+3,4219100,2026-09-02T04:31:07.882178Z,Loop,frame,loop.park,16ms
+```
+
+The banner and every rollup go to **stderr** instead — including `Probe.dump()` — so the data file needs no
+skip-the-prose rule from any consumer, and the header is the one line they can all be told about.
+
+Four decisions in that row are worth knowing, because reading the file depends on them:
+
+- **`t_mono_ns` is the sort key, never `seq`.** It is monotonic, so it cannot step sideways and sort two events
+  into an order that never happened. `t_wall` is for people, and for joining this file against anything
+  outside the process.
+- **`seq` is there so that loss is *detectable*.** A gap that is a dropped line looks exactly like a gap that
+  is a stall unless the numbering says which it was. It also breaks ties when two threads land in the same
+  nanosecond.
+- **One event is one physical line, always.** RFC 4180 permits a raw newline inside a quoted field, and a
+  single stack trace written that way ends the file's usefulness: `sort`, `grep -n` and `awk` stop describing
+  events and start describing fragments of them. Newlines are flattened to spaces; commas and quotes are
+  quoted the way a reader expects.
+- **`detail` is last**, so a naive split on commas keeps working when it contains one.
+
+The format is decided in the same static initialiser as the switch, so one process is one format for its whole
+life. There is one writer and one file on purpose: parallel writers are what make correlation lie, because
+separate buffers flush at different times and the order on disk stops being the order that happened.
+
+### `csvview`
+
+`CsvView` reads the file back. It lives beside the writer because a reader in another repository would drift
+from the *format* the first time it changed — the same failure one step further out.
+
+```bash
+java -cp atchung-probe/target/classes sibarum.probe.CsvView run.csv --gaps
+```
+
+```
+csvview <run.csv> [options]
+  --gaps [ms]     stretches with no frame in them, judged against the preceding park
+  --lane <names>  comma-separated lanes to keep
+  --kind <text>   kinds containing this
+  --thread <text> threads containing this
+  --grep <text>   rows mentioning this anywhere
+  --tail <n>      only the last n rows
+```
+
+`--gaps` defaults to 100 ms. The filters combine as "and" — an investigation narrows — and match
+case-insensitively, since the producer chose the casing and the person at the terminal should not have to
+guess it; `--lane` is the exception, an exact set, because a lane is a closed vocabulary and a partial match
+there would silently widen the answer. Rows are returned in time order, and a torn last line is skipped
+rather than fatal: a run that was killed mid-write is the normal case here.
+
+Missing sequence numbers are reported on stderr first and unconditionally. Every other answer is computed
+from the rows that are present, so a reader who is not told about the missing ones is being invited to
+conclude something from a hole.
+
+### The gap hunt
+
+The highest-value question this format serves, and the one thing `awk` cannot answer on its own, because **a
+gap is only a finding if the loop was supposed to be running.** Two marks carry that rule, and a loop has to
+emit them under these exact names:
+
+| kind | what it has to mean |
+|---|---|
+| `frame.present` | emitted every frame, so a stretch without one is a stretch with no frames |
+| `loop.park` | the loop went to sleep, with `detail` saying how long it was *allowed* to sleep — a millisecond count (`16ms` or `16`), or `forever` |
+
+Nothing in this repository publishes them; a frame loop does, with `Probe.mark(Lane.FRAME, "frame.present",
+...)`. The park is what makes a verdict possible: a render-on-demand loop parks indefinitely when nobody is
+looking, so without it a thirty-second doze and a thirty-second hang are the same silence. A gap covered by
+the park that precedes it is expected, and a gap that is not is a stall — and the row before it is the
+suspect, which is the whole reason the log is one file in time order rather than several.
+
+```
+1 gap of 100ms or more:
+
+  2026-09-02T04:31:11.113806Z for 2103.4ms  [STALL - parked on 16ms, which does not cover it]
+    from  41,7103400000,2026-09-02T04:31:11.113806Z,Loop,frame,frame.present,#41
+    last  42,7180200000,2026-09-02T04:31:11.190604Z,worker,app,save,writing 40MB
+    to    43,9206800000,2026-09-02T04:31:13.217206Z,Loop,frame,frame.present,#42
+```
+
+`read`, `filter`, `gaps` and `loss` are public, because reading a run back is not only this command's job: a
+test that asserts what its own run recorded is doing the same thing, and would otherwise reimplement it
+slightly differently.
 
 ## Instrumenting new code
 

@@ -32,6 +32,23 @@ public final class ArrayMessageRegistry implements MessageRegistry {
         allocate(capacity);
     }
 
+    /**
+     * A registry holding every type from {@code registrars}, in the order given.
+     *
+     * <p>This is how an application with more than one message-bearing module builds its
+     * registry: each module contributes its own generated {@code ElektroRegistrar}, named
+     * at the call site so nothing depends on which class the loader happened to find first.
+     * Two modules that claim the same id for different types are rejected here, at startup.
+     */
+    public static ArrayMessageRegistry of(MessageRegistrar... registrars) {
+        Objects.requireNonNull(registrars, "registrars");
+        ArrayMessageRegistry registry = new ArrayMessageRegistry();
+        for (MessageRegistrar registrar : registrars) {
+            Objects.requireNonNull(registrar, "registrar").registerInto(registry);
+        }
+        return registry;
+    }
+
     private void allocate(int capacity) {
         this.ids = new int[capacity];
         this.types = new MessageType<?>[capacity];

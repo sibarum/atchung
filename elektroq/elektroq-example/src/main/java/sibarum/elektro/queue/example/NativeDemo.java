@@ -1,7 +1,6 @@
 package sibarum.elektro.queue.example;
 
 import sibarum.elektro.queue.DefaultConduit;
-import sibarum.elektro.queue.generated.ElektroRegistrar;
 import sibarum.elektro.queue.message.ArrayMessageRegistry;
 import sibarum.elektro.queue.message.MessageRegistry;
 import sibarum.elektro.queue.message.PeerId;
@@ -25,12 +24,10 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class NativeDemo {
 
     public static void main(String[] args) throws Exception {
-        MessageRegistry serverRegistry = new ArrayMessageRegistry();
-        ElektroRegistrar.registerAll(serverRegistry);
+        MessageRegistry serverRegistry = ArrayMessageRegistry.of(ElektroRegistrar.INSTANCE);
         check(serverRegistry.size() == 3, "registrar registered all 3 message types");
 
-        MessageRegistry clientRegistry = new ArrayMessageRegistry();
-        ElektroRegistrar.registerAll(clientRegistry);
+        MessageRegistry clientRegistry = ArrayMessageRegistry.of(ElektroRegistrar.INSTANCE);
 
         TcpTransport serverTransport = TcpTransport.listening(0);
         DefaultConduit server = new DefaultConduit("server", serverTransport, serverRegistry);

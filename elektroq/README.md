@@ -173,8 +173,10 @@ handles you'll use:
 - `GreetingCodec.TYPE` — a `MessageType<Greeting>` bundling the id, schema version, and
   codec. **This is the token you pass to `action(...)` and `subscribe(...)`.**
 
-It also generates one aggregating registrar:
-`sibarum.elektro.queue.generated.ElektroRegistrar`.
+It also generates one aggregating registrar per compilation, named after the messages it
+found: `ElektroRegistrar` in their common package — `com.example.chat.ElektroRegistrar` for
+the three above. The name follows the messages rather than being fixed, because a registrar
+only knows the codecs generated beside it; see [More than one message module](#more-than-one-message-module).
 
 ### 5. Build a registry
 
@@ -182,12 +184,11 @@ The registry maps incoming type ids to their codecs. Register every message type
 startup — the generated registrar does it in a single call:
 
 ```java
-import sibarum.elektro.queue.generated.ElektroRegistrar;
+import com.example.chat.ElektroRegistrar;
 import sibarum.elektro.queue.message.ArrayMessageRegistry;
 import sibarum.elektro.queue.message.MessageRegistry;
 
-MessageRegistry registry = new ArrayMessageRegistry();
-ElektroRegistrar.registerAll(registry);   // registers Greeting, Ping, Pong
+MessageRegistry registry = ArrayMessageRegistry.of(ElektroRegistrar.INSTANCE);  // Greeting, Ping, Pong
 ```
 
 Both ends of a connection need the same types registered.
@@ -262,6 +263,40 @@ var client = ElektroTcp.client("client", "127.0.0.1", 7000, clientRegistry);
 
 A complete, runnable version of all of this lives in
 [`elektroq-example/src/main/java/.../NativeDemo.java`](elektroq-example/src/main/java/sibarum/elektro/queue/example/NativeDemo.java).
+
+### More than one message module
+
+Each module that compiles `@Message` records gets its own registrar, and an application
+names the ones it wants:
+
+```java
+MessageRegistry registry = ArrayMessageRegistry.of(
+        com.example.chat.ElektroRegistrar.INSTANCE,
+        com.example.debug.ElektroRegistrar.INSTANCE);
+```
+
+That naming is the whole point. A registrar can only register the codecs generated in its
+own compilation, so if every module emitted one class under a single fixed name, a runtime
+classpath carrying two of them would resolve to whichever the loader met first — and the
+other module's types would quietly never be registered. Their frames would then be dropped
+on arrival as unknown ids, with no error at build time or startup to read. Distinct names
+turn that into a call you can see: composing is explicit, and forgetting a registrar is a
+missing name at the call site rather than a silent reordering of the classpath.
+
+Two modules that claim the same message id for different types are rejected by
+`register` as the registry is built, so a genuine id clash surfaces at startup.
+
+Where a module's messages share no package prefix — `one.A` and `two.B` — there is no name
+to derive and the processor says so; give it one with a compiler argument:
+
+```xml
+<compilerArgs>
+  <arg>-Aelektroq.registrar=com.example.ChatRegistrar</arg>
+</compilerArgs>
+```
+
+The same option overrides the derived name whenever you'd rather write something else at
+your call sites.
 
 ---
 

@@ -27,6 +27,16 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     private final Backpressure backpressure;
     private final Fold<T> fold;
 
+    /**
+     * Told when something has been queued, so that a thread parked in {@link Pump#drain(long)} can be woken.
+     *
+     * <p><b>Called after this mailbox's lock has been released, and that is not a tidiness preference.</b> The
+     * parked thread holds the pump's monitor and reaches for this mailbox's lock to ask whether anything is
+     * waiting. A publisher that signalled while still holding this lock would be taking the two in the
+     * opposite order, which is the definition of a lock-ordering deadlock.
+     */
+    private final Runnable arrival;
+
     /** The queue, when nothing folds. Null on a folding mailbox. */
     private final ArrayDeque<T> queue;
     /**
@@ -57,8 +67,10 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     private final String dropName;
     private final String batchName;
 
-    PumpedReg(Topic<T> topic, Subscriber<T> subscriber, int capacity, Backpressure backpressure, Fold<T> fold) {
+    PumpedReg(Topic<T> topic, Subscriber<T> subscriber, int capacity, Backpressure backpressure, Fold<T> fold,
+              Runnable arrival) {
         super(topic);
+        this.arrival = arrival;
         if (capacity < 1) {
             throw new IllegalArgumentException("capacity must be >= 1, was " + capacity);
         }
@@ -76,6 +88,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
 
     @Override
     void doDeliver(T event) {
+        boolean queued = false;
         synchronized (lock) {
             Object cell = fold == null ? null : fold.cell(event);
             // A write to a cell that is already queued takes no new slot, so it can never overflow, block, or be
@@ -94,6 +107,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                         throw overflow;
                     }
                     enqueue(event, cell);
+                    queued = true;
                 }
                 case DROP_OLDEST -> {
                     while (!supersedes && queued() >= capacity) {
@@ -103,10 +117,12 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                         Probe.count(Lane.BUS, dropName);
                     }
                     enqueue(event, cell);
+                    queued = true;
                 }
                 case DROP_NEWEST -> {
                     if (supersedes || queued() < capacity) {
                         enqueue(event, cell);
+                        queued = true;
                     } else {
                         Probe.count(Lane.BUS, dropName);
                     }
@@ -117,6 +133,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                     }
                     clearQueue();
                     enqueue(event, cell);
+                    queued = true;
                 }
                 case BLOCK -> {
                     boolean interrupted = false;
@@ -129,6 +146,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                         }
                     }
                     enqueue(event, cell);
+                    queued = true;
                     if (interrupted) {
                         Thread.currentThread().interrupt();
                     }
@@ -137,6 +155,12 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
             // The peak of this counter is the number that matters: a mailbox whose depth averaged 2 and once
             // reached its capacity is a mailbox that was one publish away from dropping, or did.
             Probe.count(Lane.BUS, depthName, queued());
+        }
+        // Outside the lock, deliberately: see the field. Nothing is signalled for an event that was dropped
+        // rather than queued — a wake for a mailbox that is still empty is a thread woken to find out it had
+        // no reason to be.
+        if (queued) {
+            arrival.run();
         }
     }
 

@@ -21,6 +21,25 @@ public final class Pump {
     private final Atchung bus;
     private final CopyOnWriteArrayList<PumpedReg<?>> regs = new CopyOnWriteArrayList<>();
 
+    /**
+     * The monitor a thread parks on in {@link #drain(long)}.
+     *
+     * <p>Pump-level rather than per mailbox, because the question being waited on is <i>has anything at all
+     * arrived</i> and a pump holds many mailboxes. One condition answers it; waiting on each mailbox's own
+     * lock could not.
+     */
+    private final Object idle = new Object();
+
+    /**
+     * Whether a thread is parked right now. Read on every publish, so it is a plain field rather than
+     * anything that has to be taken: a bus whose publish path pays for a feature nobody is using is a bus
+     * that has made everyone pay for one caller.
+     */
+    private volatile boolean parked;
+
+    /** Set by {@link #wake()} to end a park that nothing arrived for. Guarded by {@link #idle}. */
+    private boolean woken;
+
     Pump(Atchung bus) {
         this.bus = bus;
     }
@@ -66,7 +85,7 @@ public final class Pump {
         Objects.requireNonNull(subscriber, "subscriber");
         Objects.requireNonNull(backpressure, "backpressure");
 
-        PumpedReg<T> reg = new PumpedReg<>(topic, subscriber, capacity, backpressure, fold);
+        PumpedReg<T> reg = new PumpedReg<>(topic, subscriber, capacity, backpressure, fold, this::arrived);
         regs.add(reg);
         Subscription busSub = bus.register(reg);
         return new PumpSubscription(reg, busSub);
@@ -88,6 +107,91 @@ public final class Pump {
             }
             Probe.count(Lane.BUS, "pump delivered", delivered);
             return delivered;
+        }
+    }
+
+    /**
+     * Deliver queued events, or <b>wait up to {@code timeoutNanos} for some to arrive</b> and then deliver
+     * them, on the calling thread.
+     *
+     * <p>This is what a consumer that has no loop of its own calls: a component whose only reason to wake is
+     * its own mailbox. {@link #drain()} is for a consumer that already has a wake — a frame loop, which has
+     * somewhere else to be and must never park here.
+     *
+     * <p><b>Waiting here does not block publishers.</b> The park releases the monitor it waits on and holds
+     * no mailbox lock at all, so a publisher never queues behind a parked consumer. What a publisher can
+     * briefly contend with is the drain's own copy of the queue, which is the same short critical section it
+     * contends with today and which ends before any handler runs.
+     *
+     * <p><b>There is no untimed form, and that is deliberate.</b> A drain that waits forever on the wrong
+     * thread — one that also publishes to this pump, or a frame loop that took the wrong overload — is a hung
+     * application rather than a slow one. A timeout turns that mistake into a stall a profile can see. For a
+     * shutdown that must not wait out the timeout, {@link #wake()}.
+     *
+     * <p><b>Do not park a virtual thread here.</b> A desktop application following Kronometer's advice runs
+     * its timeline kernel on a single carrier, and blocking work placed on that carrier deadlocks against the
+     * serialisation that makes the baton fast. A component belongs on a platform thread.
+     *
+     * @param timeoutNanos how long to wait when nothing is queued; zero or less waits not at all, which makes
+     *                     this exactly {@link #drain()}
+     * @return the number of events delivered
+     */
+    public int drain(long timeoutNanos) {
+        int delivered = drain();
+        if (delivered > 0 || timeoutNanos <= 0) {
+            return delivered;
+        }
+        // Parked outside drain()'s probe zone, on purpose. Inside it, an idle component would be recorded as
+        // a drain that took a second, and the BUS lane is the instrument that answers "why did we miss a
+        // frame" — an instrument that reports waiting as work is worse than none.
+        park(timeoutNanos);
+        return drain();
+    }
+
+    /**
+     * End a park now, whether or not anything arrived.
+     *
+     * <p>The shutdown half of {@link #drain(long)}: a component is stopped by saying so and waking it, and
+     * without this a {@code Disposer} would have to wait out whatever timeout the component happened to pass.
+     */
+    public void wake() {
+        synchronized (idle) {
+            woken = true;
+            idle.notifyAll();
+        }
+    }
+
+    /** Told by a mailbox that something was queued — from the publisher's thread, holding no mailbox lock. */
+    private void arrived() {
+        if (!parked) {
+            return;                 // nobody to wake, and nothing taken to find that out
+        }
+        synchronized (idle) {
+            idle.notifyAll();
+        }
+    }
+
+    private void park(long timeoutNanos) {
+        long deadline = System.nanoTime() + timeoutNanos;
+        synchronized (idle) {
+            parked = true;
+            try {
+                // Re-checked rather than trusted: a publisher that read `parked` as false a moment before it
+                // was set never signalled, and the event it queued is visible here through the mailbox lock
+                // that hasPending takes. That is the case a bare wait would sleep through.
+                while (!woken && !hasPending()) {
+                    long left = deadline - System.nanoTime();
+                    if (left <= 0) {
+                        break;
+                    }
+                    idle.wait(Math.max(1, left / 1_000_000L));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                woken = false;
+                parked = false;
+            }
         }
     }
 

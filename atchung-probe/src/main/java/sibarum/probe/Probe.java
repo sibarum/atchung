@@ -107,7 +107,11 @@ public final class Probe {
     private static final long ORIGIN = System.nanoTime();
 
     static {
-        String spec = setting("probe", "PROBE", "off");
+        // Nobody asked: the run's mode may have (an automation run turns the probe on, into a file beside the log),
+        // and if not it stays off. Anything asked for explicitly wins over the mode.
+        boolean asked = !setting("probe", "PROBE", "").isEmpty();
+        boolean byMode = !asked && Logging.probeLanes() != null;
+        String spec = byMode ? Logging.probeLanes() : setting("probe", "PROBE", "off");
         boolean on = !(spec.isEmpty() || spec.equalsIgnoreCase("off") || spec.equalsIgnoreCase("false")
                 || spec.equalsIgnoreCase("none") || spec.equals("0"));
         ON = on;
@@ -120,13 +124,13 @@ public final class Probe {
             LEDGER = null;
         } else {
             selectLanes(spec);
-            CSV = setting("probe.format", "PROBE_FORMAT", "text").equalsIgnoreCase("csv");
+            CSV = setting("probe.format", "PROBE_FORMAT", byMode ? "csv" : "text").equalsIgnoreCase("csv");
             // csv implies trace: the format exists to be read afterwards, and a correlation log holding only
             // the spans that happened to be slow is not one.
             TRACE = CSV || flag("probe.trace", "PROBE_TRACE");
             SLOW_NANOS = number("probe.slow", "PROBE_SLOW", 0L) * 1_000_000L;
             TOP = (int) number("probe.top", "PROBE_TOP", 12L);
-            String out = setting("probe.out", "PROBE_OUT", "");
+            String out = setting("probe.out", "PROBE_OUT", byMode ? Logging.probeFile().toString() : "");
             SINK = out.isEmpty() ? Sink.stdout() : Sink.file(Path.of(out));
             LEDGER = new Ledger(flag("probe.stacks", "PROBE_STACKS"));
             banner();

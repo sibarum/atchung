@@ -149,4 +149,63 @@ class StateTest {
         assertEquals((long) threads * per, s.version(), "one version per commit, no gaps");
         assertEquals(new Counter(threads * per), s.value(), "no lost updates under CAS commit");
     }
+
+    @Test
+    void commitIfChangedSkipsAnEqualValueAndWakesNobody() {
+        State.Builder<Counter> b = State.of(new Counter(3));
+        Committer<Counter, Integer> set = b.mutation("set", (c, n) -> new Counter(n));
+        State<Counter> s = b.build();
+        List<Long> seen = new ArrayList<>();
+        s.onCommit(snap -> seen.add(snap.version()));
+
+        assertFalse(s.commitIfChanged(set, 3));
+        assertEquals(0L, s.version());
+        assertTrue(seen.isEmpty());
+
+        assertTrue(s.commitIfChanged(set, 4));
+        assertEquals(1L, s.version());
+        assertEquals(List.of(1L), seen);
+    }
+
+    @Test
+    void onCommitLatestNeverOverlapsNorGoesBackwardsAndEndsOnTheNewest() throws Exception {
+        State.Builder<Counter> b = State.of(new Counter(0));
+        Committer<Counter, Integer> add = b.mutation("add", (c, by) -> c.plus(by));
+        State<Counter> s = b.build();
+
+        java.util.concurrent.atomic.AtomicInteger inside = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger overlapped = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger backwards = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicLong last = new java.util.concurrent.atomic.AtomicLong();
+        s.onCommitLatest(snap -> {
+            if (inside.incrementAndGet() > 1) {
+                overlapped.incrementAndGet();
+            }
+            if (snap.version() <= last.get()) {
+                backwards.incrementAndGet();
+            }
+            last.set(snap.version());
+            inside.decrementAndGet();
+        });
+
+        int threads = 8;
+        int per = 300;
+        List<Thread> ts = new ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            Thread th = new Thread(() -> {
+                for (int i = 0; i < per; i++) {
+                    s.commit(add, 1);
+                }
+            });
+            ts.add(th);
+            th.start();
+        }
+        for (Thread th : ts) {
+            th.join();
+        }
+
+        assertEquals(0, overlapped.get(), "never two deliveries at once");
+        assertEquals(0, backwards.get(), "strictly increasing versions");
+        assertEquals((long) threads * per, last.get(), "ends on the newest");
+    }
 }

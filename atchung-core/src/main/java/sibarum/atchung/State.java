@@ -80,6 +80,23 @@ public final class State<T> {
      * @throws IllegalArgumentException if {@code committer} was not declared on this state
      */
     public <P> void commit(Committer<T, P> committer, P payload) {
+        apply(committer, payload, false);
+    }
+
+    /**
+     * Like {@link #commit}, but a mutation that produces a value {@link Objects#equals equal} to the current
+     * one commits nothing: no new version, no listener woken. Saves every caller the read-compare-commit it
+     * would otherwise write, and does it correctly, since the comparison is made against the value the CAS
+     * is about to replace rather than a read taken before it.
+     *
+     * @return {@code true} if a new version was committed, {@code false} if the value did not change
+     * @throws IllegalArgumentException if {@code committer} was not declared on this state
+     */
+    public <P> boolean commitIfChanged(Committer<T, P> committer, P payload) {
+        return apply(committer, payload, true);
+    }
+
+    private <P> boolean apply(Committer<T, P> committer, P payload, boolean onlyIfChanged) {
         Objects.requireNonNull(committer, "committer");
         if (!declared.contains(committer)) {
             throw new IllegalArgumentException("mutation not declared on this State: " + committer.name());
@@ -91,6 +108,9 @@ public final class State<T> {
             while (true) {
                 Versioned<T> prev = current.get();
                 T value = committer.applyTo(prev.value(), payload);
+                if (onlyIfChanged && Objects.equals(value, prev.value())) {
+                    return false;
+                }
                 next = new Versioned<>(value, prev.version() + 1, System.nanoTime());
                 if (current.compareAndSet(prev, next)) {
                     break;
@@ -101,6 +121,7 @@ public final class State<T> {
             for (Reg<T> reg : listeners) {
                 reg.deliver(next);
             }
+            return true;
         }
     }
 
@@ -128,6 +149,37 @@ public final class State<T> {
         Reg<T> reg = new Reg<>(Objects.requireNonNull(listener, "listener"));
         listeners.add(reg);
         return new StateSubscription(reg);
+    }
+
+    /**
+     * Register a listener that is delivered in version order, one at a time, and always ends on the newest.
+     *
+     * <p>{@link #onCommit} fires on the committing thread <em>after</em> that thread's CAS, so two threads
+     * committing together can deliver version 6 then 5, or at the same instant. A listener that redraws from
+     * the snapshot would then finish on a stale one, or run twice at once. Here delivery is serialised, and a
+     * snapshot no newer than the last one delivered is dropped. Nothing is lost by that: the newer snapshot
+     * that overtook it is the whole state, not a delta.
+     *
+     * <p>The lock is on the <em>listener's</em> path, not the data path: commits and reads stay lock-free,
+     * but a committing thread may wait for another's delivery to finish. Keep the listener short. Handing off
+     * to an executor rebuilds the ordering problem; carry {@link Versioned#version()} across and drop what
+     * is older.
+     *
+     * <p>Pausable and closeable like any {@link Subscription}.
+     */
+    public Subscription onCommitLatest(StateListener<T> listener) {
+        Objects.requireNonNull(listener, "listener");
+        Object gate = new Object();
+        long[] delivered = {-1};
+        return onCommit(snap -> {
+            synchronized (gate) {
+                if (snap.version() <= delivered[0]) {
+                    return;
+                }
+                delivered[0] = snap.version();
+                listener.onCommit(snap);
+            }
+        });
     }
 
     // --- Consumers: block -------------------------------------------------

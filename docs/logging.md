@@ -118,11 +118,28 @@ the data* (a path chosen, a fallback taken and why; never a document, a token, a
 **Names are dotted and hierarchical, and name a subsystem rather than a class** when they can: `gui.frame`, not
 `GuiApp`. A level is something a person types on a command line, and they should not have to know which class does
 the work. Existing names: `log` (the banner), `uncaught`, `vexelray.diag`, `framework.{app,shell,input,faults,automation}`,
-`gui`, `gui.app`, `gui.window`, `gui.window.memory`, `automation.server`.
+`gui`, `gui.app`, `gui.window`, `gui.window.memory`, `automation.server`, `vulkan.swapchain`, `vulkan.present`.
+
+`gui.app` says at `DEBUG` what the frame ceiling is and when it changes (*frame ceiling follows the display: 6944 us a
+frame (144 Hz)*); `vulkan.swapchain` and `vulkan.present` say what was built: the swapchain's extent and image count
+against the driver's minimum, and the frames in flight. A run that is slow to start or odd to look at is read from these
+first, and `-Dlog.level.vulkan=debug` turns them on in a shipped build, where a per-logger level reaches every sink.
 
 **Not inside the frame loop.** Nothing under `FrameHooks.run` or `Pacing.nanosUntilNextFrame` logs, at any level. A
 disabled call is a volatile read and a comparison — the string is never built — but it is still a branch on the hot
 path, and an enabled one takes a lock and writes. Use `Probe` there: it was built for that budget.
+
+**Instrumenting a hot path: log once what was built, mark per frame what happened.** The split that served the frame
+loop and the presenter: a *decision or a construction* (the swapchain's size, the ceiling in force) is a `DEBUG` log,
+written once and read by a person; a *per-frame fact* (which image, how long to the fence, where in the refresh interval)
+is a `Probe.mark` behind `if (Probe.ON)`, written to the trace, read against the rows around it. An automation run
+captures both in the same file in time order, which is what lets a mark be read next to the log line that explains it.
+See [probe.md](probe.md), *Marks the stack publishes for reading a stall*, for the vocabulary.
+
+**Debug logging is for the next person to read a trace, so it stays in.** The instrumentation added to find a stall
+(the presenter's marks, the baton's `gate.open` / `gate.woke`, the compositor timing) is not scaffolding to remove after
+the fix: each is off unless asked for and costs a `static final` check, and the next stall is read from the same rows.
+An *experiment's* switch is the exception: it goes when the experiment is answered, or it is named as one and is off.
 
 **Guard what is expensive to compute.** `if (LOG.isDebug()) LOG.debug("{}", expensive())`, or pass a `Supplier`. The
 `{}` form allocates a small array when it is enabled.
@@ -171,6 +188,9 @@ a test has to be able to watch without the suite being noisy. To capture `DEBUG`
    that is the program's **output** (a CLI's answer, a protocol line) stays.
 4. Do not call `Logging.configure` from a library. Applications do, once, first.
 
-Sites still to migrate, at the time of writing: `vexelray` (~35), `atchung` (~15), `kronometer` (~41), `supirvast`
-(~22), `vexelray-designer` (~53), and `vexelray-gui-demo`'s `Demo` (a program whose output it is). `vexelray-framework`
-and `vexelray-gui`'s library code are done.
+Sites still to migrate, at the time of writing: `atchung` (~15), `supirvast` (~22), `vexelray-designer` (~53), and
+`vexelray-gui-demo`'s `Demo` (a program whose output it is). `vexelray-framework`, `vexelray-gui`'s library code and
+**`vexelray`'s libraries are done**: what remains in `vexelray` is three programs in `vexelray-demo` and three in
+`vexelray-experimental`, whose output it is. `kronometer`'s remaining sites are all in `kronometer-bench` and
+`kronometer-demo`, programs likewise. (The counts for `atchung`, `supirvast` and `vexelray-designer` are the earlier
+ones, not rechecked.)

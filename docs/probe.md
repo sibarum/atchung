@@ -52,15 +52,49 @@ Anything on the command line overrides it.
 |---|---|
 | `bus` | Atchung publish, fan-out, mailbox depth, drops, pump drains |
 | `state` | `State<T>` commits and CAS retries |
-| `time` | the Kronometer kernel: ticks, batches, handoffs, overrun |
+| `time` | the Kronometer kernel: ticks, batches, handoffs, overrun, and the baton's `gate.open` / `gate.woke` |
 | `anim` | effects and graph invalidation |
 | `input` | Tactroller's OS snapshot, the publish, drag recognition |
 | `frame` | the GUI frame loop, and the wait between frames |
 | `layout` | dispatch, drain, flex layout, geometry resolution |
 | `draw` | canvas emission, vertex and run counts |
-| `gpu` | fence wait, acquire, submit, present, swapchain rebuilds, native resource lifetimes |
+| `gpu` | fence wait, acquire, submit, present, swapchain rebuilds, native resource lifetimes, and the marks `frame.image`, `frame.latency`, `dwm.start` / `dwm.presented` |
 | `shader` | Supir parsing, SPIR-V lowering, shader-cache hits and misses |
 | `app` | yours; nothing in the framework publishes here |
+
+### Marks the stack publishes for reading a stall
+
+Marks are instants, not spans, and **exist only in the trace** (`-Dprobe.format=csv`, which an automation run turns on):
+the rollup counts them and nothing more. All of them are guarded by `Probe.ON`, so a normal build pays nothing.
+
+| lane | kind | `detail` | answers |
+|---|---|---|---|
+| `frame` | `frame.present`, `loop.park` | frame number; the park's budget | was a gap covered by a park (see *The gap hunt*) |
+| `frame` | `wake`, `wake.post` | which tree; what was nudged | what ended a park, and from which thread |
+| `time` | `gate.open` | `-> <thread>` | the sender of a baton pass between the kernel and a shred |
+| `time` | `gate.woke` | empty | the receiver's first instruction after it. **The gap between the two is the scheduler's** (a virtual thread waiting for a carrier, a carrier waiting for the OS), which no span on either side can see. On the machine measured it is 50 to 100 us |
+| `gpu` | `frame.image` | `frame=N image=I acquire=R` | which swapchain image a frame got. The same index on consecutive frames was seen in steady state on Windows, where the compositor releases the image at once |
+| `gpu` | `frame.latency` | `frame=N slot=S submit-to-fence Tus` | submit to the fence's wait returning, from the CPU's side. Climbing over a burst and then plateauing at a multiple of the refresh interval is a **full present queue**, not a slow GPU |
+| `gpu` | `dwm.start`, `dwm.presented` | `vblank=… phaseUs=… composed=… submitted=… confirmed=… late=… outstanding=…` | where in the refresh interval a frame began and was presented. **Read `phaseUs`**, which counts 0 to the interval (6944 at 144 Hz): five frames whose phases ascend within one interval were produced faster than they can be shown. The counts only follow this application's own presents. Windows only |
+
+### Reading a stall: the method that found the burst
+
+A late frame is a symptom, and the order that works is: find it, find what the loop was doing, then ask of each
+candidate cause whether the rows say it was *busy* or *waiting*.
+
+1. **Find the gap.** `loop.park` rows say whether a gap was allowed; a `frame.present` after a gap the park does not
+   cover is the stall.
+2. **Read the rows inside it, in time order.** Frame-loop rows (`frame`, `time`, `gpu`) with the thread name beside them
+   say which thread was doing what. A `wait fence` of 20 ms with a `queue submit` of 50 us before it is the CPU waiting,
+   not working.
+3. **Separate the GPU from the queue in front of it.** `frame.latency` small for most frames and then one large is a
+   queue draining. Large for every frame is a slow GPU.
+4. **Put the frames on the display's clock.** `dwm.*` `phaseUs` on consecutive frames. A burst is frames whose phases
+   rise inside one interval; the wait that follows is the display catching up at one frame per refresh.
+5. **Prove it by removing it.** Change one thing (`-Dvexelray.present.flush=true`, a frame ceiling, a swapchain image
+   count) and look at the same rows. A cause that is only inferred from timings is one experiment short.
+
+The worked case, with the numbers, is `vexelray-framework/docs/architecture.md`, *what the stall probes found*.
 
 ## Reading a report
 

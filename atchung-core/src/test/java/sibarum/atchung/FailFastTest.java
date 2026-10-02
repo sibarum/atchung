@@ -121,6 +121,49 @@ class FailFastTest {
     }
 
     @Test
+    void theReportNamesWhoPublishedWhenAndWhenTheConsumerLastDrained() throws Exception {
+        Atchung bus = Atchung.create();
+        Pump pump = bus.pump();
+        pump.subscribe(EDGES, e -> { }, 1, Backpressure.FAIL);
+
+        MailboxOverflow never = overflowFromANamedThread(bus, "publisher-7");
+        assertEquals("publisher-7", never.publisherThread());
+        assertTrue(never.origin().getMethodName().contains("overflowFromANamedThread"),
+                "the origin is whoever called publish, not the bus's own frames: " + never.origin());
+        assertEquals(0, never.lastDrainMillis());
+        assertTrue(never.getMessage().contains("has never been drained"), never.getMessage());
+        assertTrue(never.getMessage().contains("publisher-7"), never.getMessage());
+        assertTrue(never.getMessage().contains("overflowFromANamedThread"), never.getMessage());
+
+        pump.drain();
+        long before = System.currentTimeMillis();
+        bus.publish(EDGES, "a");
+        pump.drain();
+        bus.publish(EDGES, "b");
+        MailboxOverflow after = assertThrows(MailboxOverflow.class, () -> bus.publish(EDGES, "c"));
+
+        assertTrue(after.lastDrainMillis() >= before && after.lastDrainMillis() <= after.publishedMillis(),
+                "the last drain is when the consumer last took a batch");
+        assertTrue(after.getMessage().contains("was last drained at"), after.getMessage());
+        assertTrue(!never.getMessage().contains("second"), "the payload is deliberately not in the report");
+    }
+
+    private static MailboxOverflow overflowFromANamedThread(Atchung bus, String name) throws Exception {
+        AtomicReference<MailboxOverflow> caught = new AtomicReference<>();
+        Thread t = new Thread(() -> {
+            bus.publish(EDGES, "first");
+            try {
+                bus.publish(EDGES, "second");
+            } catch (MailboxOverflow e) {
+                caught.set(e);
+            }
+        }, name);
+        t.start();
+        t.join();
+        return caught.get();
+    }
+
+    @Test
     void theDefaultFatalPolicyIsToHalt() {
         Atchung.onFatal(null);
         assertSame(Fatal.HALT, Atchung.fatal(),

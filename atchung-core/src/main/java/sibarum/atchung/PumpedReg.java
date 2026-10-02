@@ -49,6 +49,13 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     private final Object lock = new Object();
     /** How many events have been handed to the subscriber, for {@link MailboxOverflow}. Guarded by the lock. */
     private long delivered;
+    /** When this mailbox was made, for an overflow that has never seen a drain. */
+    private final long subscribedMillis = System.currentTimeMillis();
+    /**
+     * When the consumer last took a batch, or 0 if it never has. Written once per non-empty drain, not per event
+     * and not on an empty poll, so it costs nothing on the path a frame loop runs every frame. Guarded by the lock.
+     */
+    private long lastDrainMillis;
 
     /** The key of an event that folds with nothing: unique by identity, so every edge keeps its own slot. */
     private static final class Edge {
@@ -102,7 +109,8 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                         // the default, so releasing the lock first would leave a publisher that is about to
                         // halt racing a drain that is about to succeed, and the report would name a mailbox
                         // that had just been emptied. The state described has to be the state observed.
-                        MailboxOverflow overflow = new MailboxOverflow(topic(), capacity, delivered);
+                        MailboxOverflow overflow = new MailboxOverflow(topic(), capacity, delivered,
+                                subscribedMillis, lastDrainMillis);
                         Atchung.fatal().fault(overflow);
                         throw overflow;
                     }
@@ -221,6 +229,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
             batch = fold == null ? new ArrayList<>(queue) : new ArrayList<>(folded.values());
             clearQueue();
             delivered += batch.size();
+            lastDrainMillis = System.currentTimeMillis();
             lock.notifyAll(); // wake any BLOCK publisher waiting on space
         }
         Probe.count(Lane.BUS, batchName, batch.size());

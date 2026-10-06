@@ -37,7 +37,9 @@
  * processor (the planned {@code elektroq-codegen} module) generates a
  * {@link sibarum.elektro.queue.wire.Codec} and a registry entry for each, targeting the
  * {@link sibarum.elektro.queue.wire.WireWriter} / {@link sibarum.elektro.queue.wire.WireReader}
- * contract. The frame {@link sibarum.elektro.queue.message.HeaderCodec} is the worked
- * example of that layout.
+ * contract. A message type may instead be backed by an intrabuf codec
+ * ({@link sibarum.elektro.queue.message.MessageType#of}). Either way, every frame's
+ * {@link sibarum.elektro.queue.message.Envelope} carries intrabuf's schema facts, so the
+ * receiver can check compatibility before decoding.
  */
 package sibarum.elektro.queue;

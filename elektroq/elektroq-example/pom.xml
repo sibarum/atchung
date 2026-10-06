@@ -60,7 +60,17 @@
                             <artifactId>elektroq-core</artifactId>
                             <version>1.0-SNAPSHOT</version>
                         </path>
+                        <!-- And intrabuf's, for the @IntrabufMessage record (Telemetry). -->
+                        <path>
+                            <groupId>sibarum.intrabuf</groupId>
+                            <artifactId>intrabuf-processor</artifactId>
+                            <version>${intrabuf.version}</version>
+                        </path>
                     </annotationProcessorPaths>
+                    <compilerArgs>
+                        <arg>-Aintrabuf.buildVersion=${project.version}</arg>
+                        <arg>-Aintrabuf.module=${project.artifactId}</arg>
+                    </compilerArgs>
                 </configuration>
             </plugin>
             <plugin>

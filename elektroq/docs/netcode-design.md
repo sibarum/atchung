@@ -43,7 +43,7 @@ GameNetworkingSockets, QUIC, and netcode.io.
 ```
   application  ─────────────────────────────────────────────
       │  Action/Actor, DynValue, request/reply   (unchanged)
-  message envelope (24-byte header: typeId, schema, corr, flags, len)
+  message envelope (intrabuf header: typeId, version, compat, flags, corr)
       │
   ┌── netcode layer (NEW) ────────────────────────────────┐
   │  L6 media profile   (FEC, jitter buffer, deadlines)   │

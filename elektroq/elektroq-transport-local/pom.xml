@@ -32,4 +32,31 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <!-- The conduit tests include intrabuf-backed message types, so test compilation runs the
+                 intrabuf processor. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>sibarum.intrabuf</groupId>
+                            <artifactId>intrabuf-processor</artifactId>
+                            <version>${intrabuf.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                    <compilerArgs>
+                        <arg>-Aintrabuf.buildVersion=${project.version}</arg>
+                        <!-- The test schemas stand in for two released versions of one schema talking to each
+                             other. As snapshots, intrabuf would (rightly) reject any structural difference
+                             between them, whatever their version numbers allow. -->
+                        <arg>-Aintrabuf.snapshot=false</arg>
+                        <arg>-Aintrabuf.module=${project.artifactId}</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

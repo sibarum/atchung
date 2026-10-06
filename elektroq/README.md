@@ -57,15 +57,20 @@ The model is a triad:
 
 ## Architecture in one screen
 
-**Wire format.** Every frame is a fixed **24-byte header** followed by a payload:
+**Wire format.** Every frame is an **envelope** followed by a payload. The envelope
+(`Envelope`, protocol version 2) is an intrabuf (sibling `intrabuf` repo) header record: a bitset
+(snapshot, fingerprint-present, request, reply, fragment, compressed), then magic
+(`0xEC51`), protocol version, intrabuf wire version, `typeId`, major, minor, compatibility
+mode, an optional fingerprint, and the correlation id, integers as varints. A one-way emit
+of a small-id message spends 10 bytes on it, against version 1's fixed 24. There is no
+payload length: transports already delimit frames.
 
-```
-magic(2=0xEC51) | version(1) | flags(1) | typeId(4) | schemaVersion(4) | correlationId(8) | payloadLength(4)
-```
-
-The header tells a receiver how to route a frame (`typeId` → registry lookup) before
-decoding the payload. Codecs write primitives big-endian and use LEB128 var-ints for
-compact lengths.
+The envelope tells a receiver how to route a frame (`typeId` → registry lookup), and gives
+intrabuf what it needs to decide, before decoding, whether this build may read the payload:
+a different major or compatibility mode, a payload from a newer minor where only backward
+compatibility is promised, or a schema changed without a version bump (the fingerprint) all
+fail loudly instead of decoding garbage. `@Message` codecs write primitives big-endian and use
+LEB128 var-ints for compact lengths; intrabuf-backed messages use intrabuf's encoding.
 
 **Framing vs. transport.** A `Conduit` builds the header+payload frame and hands the
 opaque bytes to a `Transport`. The transport is oblivious to the header — the TCP
@@ -323,7 +328,28 @@ public record Ping(
 A field that is `optional` or `since > 1` is read behind a "bytes remaining?" guard and
 **must be trailing** (the processor enforces this). The effect: a newer decoder reading an
 older, shorter payload fills such fields with defaults, and an older decoder harmlessly
-ignores trailing bytes it doesn't understand.
+ignores trailing bytes it doesn't understand. In the envelope, a `@Message` type appears as
+major 1, minor `schemaVersion - 1`, FULL compatibility.
+
+### Intrabuf messages
+
+A message type can also be an intrabuf `@IntrabufMessage` record, which adds collections,
+maps, `Optional`, enums, `UUID`/`Instant`, nullable fields, and intrabuf's STRICT /
+BACKWARD / FULL compatibility modes with a structural fingerprint. Give it an id from the
+same space as your `@Message` ids, put `intrabuf-processor` on the processor path, and
+register it beside the generated ones:
+
+```java
+@IntrabufMessage(name = "example.Telemetry", id = 100, compat = Compat.BACKWARD)
+public record Telemetry(String node, List<Double> samples, Map<String, Long> counters,
+                        Optional<String> note) { }
+
+registry.register(MessageType.of(TelemetryIntrabuf.CODEC, Telemetry.class));
+```
+
+The conduit hands the envelope's facts to intrabuf, so a peer on an older or newer version
+of the schema is decoded, or refused, by intrabuf's rules. Frames can be inspected with the
+intrabuf CLI: `intrabuf decode --header elektroq.Envelope -m elektroq-core.jar -m app.jar frame.bin`.
 
 ---
 

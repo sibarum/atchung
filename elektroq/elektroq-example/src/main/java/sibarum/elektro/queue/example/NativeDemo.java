@@ -3,10 +3,14 @@ package sibarum.elektro.queue.example;
 import sibarum.elektro.queue.DefaultConduit;
 import sibarum.elektro.queue.message.ArrayMessageRegistry;
 import sibarum.elektro.queue.message.MessageRegistry;
+import sibarum.elektro.queue.message.MessageType;
 import sibarum.elektro.queue.message.PeerId;
 import sibarum.elektro.queue.transport.tcp.TcpTransport;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -26,8 +30,10 @@ public final class NativeDemo {
     public static void main(String[] args) throws Exception {
         MessageRegistry serverRegistry = ArrayMessageRegistry.of(ElektroRegistrar.INSTANCE);
         check(serverRegistry.size() == 3, "registrar registered all 3 message types");
+        serverRegistry.register(TELEMETRY);
 
         MessageRegistry clientRegistry = ArrayMessageRegistry.of(ElektroRegistrar.INSTANCE);
+        clientRegistry.register(TELEMETRY);
 
         TcpTransport serverTransport = TcpTransport.listening(0);
         DefaultConduit server = new DefaultConduit("server", serverTransport, serverRegistry);
@@ -41,6 +47,7 @@ public final class NativeDemo {
         try {
             runEmit(server, client);
             runRequestReply(server, client);
+            runIntrabuf(server, client);
         } finally {
             client.close();
             server.close();
@@ -75,6 +82,25 @@ public final class NativeDemo {
 
         check(pong.seq() == 42L, "reply correlated to the request sequence");
         check("ack".equals(pong.note()), "reply payload survived the wire");
+    }
+
+    /** An intrabuf-generated codec, registered beside the elektro-Q-generated ones. */
+    private static final MessageType<Telemetry> TELEMETRY = MessageType.of(TelemetryIntrabuf.CODEC, Telemetry.class);
+
+    private static void runIntrabuf(DefaultConduit server, DefaultConduit client) throws Exception {
+        CountDownLatch delivered = new CountDownLatch(1);
+        AtomicReference<Telemetry> seen = new AtomicReference<>();
+        server.subscribe(TELEMETRY, (message, context) -> {
+            seen.set(message);
+            delivered.countDown();
+        });
+
+        Telemetry sent = new Telemetry("native-node", List.of(1.5, -0.25, 1e300),
+                Map.of("frames", 1_200L, "drops", 0L), Optional.of("intrabuf over elektro-Q"));
+        client.action(TELEMETRY).emit(sent);
+
+        check(delivered.await(5, TimeUnit.SECONDS), "intrabuf message reached the remote actor");
+        check(sent.equals(seen.get()), "intrabuf payload survived the wire");
     }
 
     private static void check(boolean condition, String what) {

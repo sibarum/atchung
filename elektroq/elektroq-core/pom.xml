@@ -16,10 +16,18 @@
     <description>
         Core API for elektro-Q: the Action/Conduit/Actor triad, the message
         envelope, the reflection-free wire/codec contract, and the source-level
-        annotations targeted by the codec generator. Depends on the JDK only.
+        annotations targeted by the codec generator. Depends on the JDK and on
+        intrabuf-runtime (itself JDK-only), whose header roles the envelope carries.
     </description>
 
     <dependencies>
+        <!-- The envelope is an intrabuf @IntrabufHeader record, so every frame carries intrabuf's
+             compatibility facts, and a message type may be backed by an intrabuf codec (MessageType.of). -->
+        <dependency>
+            <groupId>sibarum.intrabuf</groupId>
+            <artifactId>intrabuf-runtime</artifactId>
+            <version>${intrabuf.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
@@ -27,4 +35,26 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <!-- Generates EnvelopeIntrabuf from the Envelope record (and codecs for test messages). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>sibarum.intrabuf</groupId>
+                            <artifactId>intrabuf-processor</artifactId>
+                            <version>${intrabuf.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                    <compilerArgs>
+                        <arg>-Aintrabuf.buildVersion=${project.version}</arg>
+                        <arg>-Aintrabuf.module=${project.artifactId}</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

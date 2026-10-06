@@ -1,8 +1,9 @@
 package sibarum.elektro.queue;
 
+import sibarum.elektro.queue.message.Envelope;
+import sibarum.elektro.queue.message.EnvelopeIntrabuf;
 import sibarum.elektro.queue.message.Flags;
-import sibarum.elektro.queue.message.HeaderCodec;
-import sibarum.elektro.queue.message.MessageHeader;
+import sibarum.elektro.queue.message.IntrabufCodec;
 import sibarum.elektro.queue.message.MessageRegistry;
 import sibarum.elektro.queue.message.MessageType;
 import sibarum.elektro.queue.message.PeerId;
@@ -12,6 +13,12 @@ import sibarum.elektro.queue.transport.PeerListener;
 import sibarum.elektro.queue.transport.Transport;
 import sibarum.elektro.queue.wire.WireBufferReader;
 import sibarum.elektro.queue.wire.WireBufferWriter;
+import sibarum.intrabuf.Compatibility;
+import sibarum.intrabuf.Header;
+import sibarum.intrabuf.HeaderCodec;
+import sibarum.intrabuf.IbReader;
+import sibarum.intrabuf.IbWriter;
+import sibarum.intrabuf.IntrabufException;
 
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -34,9 +41,10 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>It is transport-agnostic &mdash; it speaks only the {@link Transport} SPI &mdash;
  * so the same conduit drives TCP today and any future medium unchanged. Outbound, it
- * encodes a payload, prepends a {@link MessageHeader}, and hands the frame to the
- * transport. Inbound, it decodes the header, looks the type up by id, decodes the
- * payload, and either completes a pending {@code request} (on a {@code REPLY}) or
+ * writes an {@link Envelope} carrying the type's schema facts, then the payload, and
+ * hands the frame to the transport. Inbound, it decodes the envelope, looks the type
+ * up by id, has intrabuf check the envelope's facts against the type's schema, decodes
+ * the payload, and either completes a pending {@code request} (on a {@code REPLY}) or
  * dispatches to the {@link Actor}s subscribed to that type.
  *
  * <p>Actors are invoked on the transport's receive thread, which for the bundled TCP
@@ -147,15 +155,38 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
 
     @Override
     public void onFrame(PeerId source, ByteBuffer frame) {
-        WireBufferReader reader = WireBufferReader.of(frame);
-        MessageHeader header = HeaderCodec.INSTANCE.decode(reader);
+        byte[] bytes;
+        int offset;
+        int length = frame.remaining();
+        if (frame.hasArray()) {
+            bytes = frame.array();
+            offset = frame.arrayOffset() + frame.position();
+        } else {
+            bytes = new byte[length];
+            frame.duplicate().get(bytes);
+            offset = 0;
+        }
+        IbReader reader = new IbReader(bytes, offset, length);
+        HeaderCodec.Frame<Envelope> envelopeFrame;
+        try {
+            envelopeFrame = EnvelopeIntrabuf.CODEC.readFrame(reader);
+        } catch (IntrabufException e) {
+            throw new ElektroException("Malformed frame envelope: " + e.getMessage(), e);
+        }
+        Envelope header = envelopeFrame.header();
+        if (header.magic() != Protocol.MAGIC) {
+            throw new ElektroException("Bad frame magic: 0x" + Integer.toHexString(header.magic() & 0xFFFF));
+        }
+        if ((header.protocolVersion() & 0xFF) != Protocol.VERSION) {
+            throw new ElektroException("Unsupported protocol version: " + (header.protocolVersion() & 0xFF));
+        }
         MessageType<?> type = registry.byId(header.typeId());
         if (type == null) {
             return; // unknown type id: drop rather than guess
         }
-        Object payload = type.codec().decode(reader);
+        Object payload = decodePayload(type, envelopeFrame.facts(), reader, bytes, offset);
 
-        if (header.isReply()) {
+        if (header.reply()) {
             Pending waiter = pending.remove(header.correlationId());
             if (waiter != null) {
                 waiter.future().complete(payload);
@@ -194,18 +225,40 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
 
     // --- emit / request internals -----------------------------------------------
 
+    /**
+     * Decodes a payload once the envelope's facts are in hand. An intrabuf-backed type is checked and decoded by
+     * intrabuf, against whichever version of its schema the sender had. A {@code @Message} type is checked against
+     * its synthesized schema (same id, major and mode) and then decoded by its own codec, which applies elektro-Q's
+     * trailing-field rules.
+     */
+    private static Object decodePayload(MessageType<?> type, Header facts, IbReader reader, byte[] bytes, int offset) {
+        try {
+            if (type.codec() instanceof IntrabufCodec<?> intrabuf) {
+                return intrabuf.messageCodec().decodeBody(facts, reader);
+            }
+            Compatibility.check(type.schema(), facts);
+        } catch (IntrabufException e) {
+            throw new ElektroException(type.name() + ": " + e.getMessage(), e);
+        }
+        int start = offset + reader.position();
+        return type.codec().decode(new WireBufferReader(bytes, start, reader.remaining()));
+    }
+
     <T> void sendFrame(PeerId destination, MessageType<T> type, T message, byte flags, long correlationId) {
-        WireBufferWriter payloadWriter = new WireBufferWriter();
-        type.codec().encode(message, payloadWriter);
-        byte[] payload = payloadWriter.toByteArray();
-
-        MessageHeader header = new MessageHeader(
-                type.id(), type.schemaVersion(), flags, correlationId, payload.length);
-
-        WireBufferWriter frameWriter = new WireBufferWriter(Protocol.HEADER_BYTES + payload.length);
-        HeaderCodec.INSTANCE.encode(header, frameWriter);
-        frameWriter.putBytes(payload);
-        transport.send(destination, frameWriter.toByteBuffer());
+        IbWriter frame = new IbWriter(64);
+        try {
+            EnvelopeIntrabuf.CODEC.write(frame, Envelope.of(type.schema(), flags, correlationId));
+            if (type.codec() instanceof IntrabufCodec<T> intrabuf) {
+                intrabuf.messageCodec().encodeBody(message, frame);
+            } else {
+                WireBufferWriter payload = new WireBufferWriter();
+                type.codec().encode(message, payload);
+                frame.writeRaw(payload.toByteArray());
+            }
+        } catch (IntrabufException e) {
+            throw new ElektroException(type.name() + ": " + e.getMessage(), e);
+        }
+        transport.send(destination, ByteBuffer.wrap(frame.array(), 0, frame.position()));
     }
 
     <T, R> CompletionStage<R> request(MessageType<T> type, T message, PeerId destination, MessageType<R> replyType) {
@@ -258,7 +311,7 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
         }
     }
 
-    private record IncomingContext(DefaultConduit conduit, PeerId source, MessageHeader header, MessageType<?> type)
+    private record IncomingContext(DefaultConduit conduit, PeerId source, Envelope header, MessageType<?> type)
             implements MessageContext {
 
         @Override
@@ -268,12 +321,12 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
 
         @Override
         public boolean isRequest() {
-            return header.isRequest();
+            return header.request();
         }
 
         @Override
         public <R> void reply(MessageType<R> replyType, R reply) {
-            if (!header.isRequest()) {
+            if (!header.request()) {
                 throw new ElektroException("Cannot reply to a message that is not a request");
             }
             conduit.sendFrame(source, replyType, reply, Flags.REPLY, header.correlationId());

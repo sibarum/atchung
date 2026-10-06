@@ -16,6 +16,9 @@
         <junit.version>5.11.4</junit.version>
         <surefire.version>3.5.2</surefire.version>
         <compiler.plugin.version>3.13.0</compiler.plugin.version>
+        <!-- intrabuf: the envelope's header roles, and intrabuf-backed message types. Installed to the
+             local .m2 by `mvn install` in the sibling intrabuf repo. -->
+        <intrabuf.version>0.1.0-SNAPSHOT</intrabuf.version>
     </properties>
 
     <modules>

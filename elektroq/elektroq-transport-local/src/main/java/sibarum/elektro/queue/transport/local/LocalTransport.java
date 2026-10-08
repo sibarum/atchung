@@ -169,12 +169,40 @@ public final class LocalTransport implements Transport {
     private void deliverLoop() {
         try {
             while (!closed) {
-                Inbound in = inbox.take();
-                frameListener.onFrame(in.source, ByteBuffer.wrap(in.frame));
+                dispatch(inbox.take());
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /**
+     * Hands one frame to the listener, absorbing a fault in it.
+     *
+     * <p>Each frame is a whole, independent buffer, so a listener that throws on one has not disturbed
+     * the next. Reported and skipped, therefore, rather than escaping into {@code threads.submit} where
+     * it would be filed in an unread {@code Future}, end this loop, and leave every later frame to this
+     * transport silently undelivered.
+     */
+    private void dispatch(Inbound in) {
+        try {
+            frameListener.onFrame(in.source, ByteBuffer.wrap(in.frame));
+        } catch (RuntimeException e) {
+            fault("frame listener failed on a " + in.frame.length + "-byte frame from peer "
+                    + in.source.handle() + "; frame dropped", e);
+        }
+    }
+
+    /**
+     * The last-resort report for a fault on a thread with no caller to throw to.
+     *
+     * <p>stderr because this module has no probe and no logger, and a fault nobody hears about is the
+     * failure this reporting exists to prevent &mdash; the same reasoning as the TCP transport's
+     * {@code fault}. A transport that grows a diagnostic seam should route these through it instead.
+     */
+    private static void fault(String what, Throwable cause) {
+        System.err.println("[elektroq] local: " + what + ": " + cause);
+        cause.printStackTrace(System.err);
     }
 
     /** Enqueues an inbound frame for this transport's deliver loop; blocks if the inbox is full. */

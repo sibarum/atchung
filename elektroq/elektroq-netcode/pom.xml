@@ -7,7 +7,7 @@
     <parent>
         <groupId>sibarum.elektro.queue</groupId>
         <artifactId>elektroq</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.0</version>
     </parent>
 
     <artifactId>elektroq-netcode</artifactId>
@@ -25,13 +25,13 @@
         <dependency>
             <groupId>sibarum.elektro.queue</groupId>
             <artifactId>elektroq-core</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.0</version>
         </dependency>
         <!-- Test-only: the in-VM transport is the deterministic substrate the simulator wraps. -->
         <dependency>
             <groupId>sibarum.elektro.queue</groupId>
             <artifactId>elektroq-transport-local</artifactId>
-            <version>1.0-SNAPSHOT</version>
+            <version>1.0</version>
             <scope>test</scope>
         </dependency>
         <dependency>

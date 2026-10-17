@@ -391,7 +391,10 @@ mvn -Pnative verify     # + build and run the native smoke test (GraalVM require
 
 Working today: the core triad, compile-time codecs (primitives, `String`, `byte[]`, nested
 messages), the TCP and in-VM local transports, request/reply with timeouts and disconnect
-handling, and a native-image build.
+handling, and a native-image build. The stream transports (TCP, UDS) take a `sendTimeout` that drops a peer
+whose writes stay blocked, so one stalled reader cannot hold a sender for ever; a UDS listener clears a socket file
+a crash left behind (only when nobody answers a dial to it); and `Conduit.addPeerListener` reports peers coming and
+going.
 
 The `elektroq-netcode` module adds a UDP transport and a layered real-time stack, built
 out in phases (see [`docs/netcode-design.md`](docs/netcode-design.md)):

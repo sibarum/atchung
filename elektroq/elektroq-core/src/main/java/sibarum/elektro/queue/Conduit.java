@@ -43,6 +43,17 @@ public interface Conduit extends AutoCloseable {
     /** Snapshot of the currently connected peers. */
     Set<PeerId> peers();
 
+    /**
+     * Calls {@code listener} as peers connect and disconnect, so an application can start and stop per-peer work
+     * rather than poll {@link #peers()}. It runs on the transport's thread for that peer, after the conduit has
+     * updated {@link #peers()}, and must not block. A listener that throws is reported and skipped: it neither
+     * refuses the peer nor stops the other listeners.
+     */
+    void addPeerListener(sibarum.elektro.queue.transport.PeerListener listener);
+
+    /** Stops calling {@code listener}. A listener that was never added is ignored. */
+    void removePeerListener(sibarum.elektro.queue.transport.PeerListener listener);
+
     /** Closes the transport and all connections. Idempotent. */
     @Override
     void close();

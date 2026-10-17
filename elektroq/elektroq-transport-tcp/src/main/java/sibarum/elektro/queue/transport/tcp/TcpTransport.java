@@ -37,6 +37,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * a dedicated virtual thread running a blocking read loop; writes are serialized per
  * connection. All callbacks ({@link FrameListener}, {@link PeerListener}) run on those
  * connection threads.
+ *
+ * <p><b>A peer that stops reading</b> fills its receive buffer, and a write to it then blocks — by default for
+ * ever, holding that connection's write lock. {@link #sendTimeout} bounds it: a write still blocked after the
+ * timeout drops the peer, so the send fails, the peer is reported disconnected, and the sender is free again.
  */
 public final class TcpTransport implements Transport {
 
@@ -60,10 +64,48 @@ public final class TcpTransport implements Transport {
     private volatile PeerListener peerListener = NO_PEER_LISTENER;
     private volatile ServerSocket serverSocket;
     private volatile boolean closed;
+    /** How long one write may block before its peer is dropped; 0 for no bound. */
+    private volatile long sendTimeoutNanos;
 
     private TcpTransport(Mode mode, InetSocketAddress address) {
         this.mode = mode;
         this.address = address;
+    }
+
+    /**
+     * Bound how long a send may block on one peer: a write still blocked after {@code timeout} drops that peer,
+     * so the send throws, {@code onDisconnected} follows, and nothing else waits behind it. {@code null} or zero for
+     * no bound, the default. Set before {@link #start()}.
+     */
+    public TcpTransport sendTimeout(java.time.Duration timeout) {
+        if (timeout != null && timeout.isNegative()) {
+            throw new IllegalArgumentException("sendTimeout must not be negative, was " + timeout);
+        }
+        this.sendTimeoutNanos = timeout == null ? 0L : timeout.toNanos();
+        return this;
+    }
+
+    /**
+     * Drop any peer whose write has been blocked for longer than the send timeout. Closing its socket ends the
+     * blocked write with an exception, which {@link Connection#write} turns into the timeout's own message.
+     */
+    private void watchWrites() {
+        long period = Math.max(1_000_000L, sendTimeoutNanos / 4);
+        while (!closed) {
+            try {
+                java.util.concurrent.locks.LockSupport.parkNanos(period);
+                long now = System.nanoTime();
+                for (Connection connection : connections.values()) {
+                    long since = connection.writingSince;
+                    if (since != 0 && now - since > sendTimeoutNanos) {
+                        connection.timedOut = true;
+                        connection.closeQuietly();
+                    }
+                }
+            } catch (RuntimeException e) {
+                System.err.println("[elektroq] tcp: the send-timeout watch faulted: " + e);
+            }
+        }
     }
 
     /** A server transport bound to {@code port} (0 selects an ephemeral port). */
@@ -104,6 +146,9 @@ public final class TcpTransport implements Transport {
                 Socket socket = new Socket();
                 socket.connect(address);
                 register(socket);
+            }
+            if (sendTimeoutNanos > 0) {
+                threads.submit(this::watchWrites);
             }
             started.complete(null);
         } catch (IOException e) {
@@ -296,6 +341,10 @@ public final class TcpTransport implements Transport {
         private final DataInputStream in;
         private final DataOutputStream out;
         private final Object writeLock = new Object();
+        /** When the write in progress began, by {@link System#nanoTime()}; 0 when none is. */
+        volatile long writingSince;
+        /** Set by the watch when it dropped this peer for a write that did not finish in time. */
+        volatile boolean timedOut;
 
         Connection(PeerId peer, Socket socket) throws IOException {
             this.peer = peer;
@@ -306,13 +355,20 @@ public final class TcpTransport implements Transport {
 
         void write(byte[] frame) {
             synchronized (writeLock) {
+                writingSince = Math.max(1L, System.nanoTime());
                 try {
                     out.writeInt(frame.length);
                     out.write(frame);
                     out.flush();
                 } catch (IOException e) {
                     closeQuietly();
+                    if (timedOut) {
+                        throw new ElektroException("Send to peer " + peer.handle() + " timed out after "
+                                + sendTimeoutNanos / 1_000_000L + " ms; the peer was dropped", e);
+                    }
                     throw new ElektroException("Failed to send to peer " + peer.handle() + ": " + e.getMessage(), e);
+                } finally {
+                    writingSince = 0L;
                 }
             }
         }

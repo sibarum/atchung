@@ -63,6 +63,7 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
     private final Map<Long, Pending> pending = new ConcurrentHashMap<>();
     private final AtomicLong correlation = new AtomicLong(1);
     private final Duration requestTimeout;
+    private final List<PeerListener> peerListeners = new CopyOnWriteArrayList<>();
 
     /** Creates a conduit whose requests never time out on their own. */
     public DefaultConduit(String name, Transport transport, MessageRegistry registry) {
@@ -131,6 +132,34 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
     @Override
     public Set<PeerId> peers() {
         return Set.copyOf(peers);
+    }
+
+    @Override
+    public void addPeerListener(PeerListener listener) {
+        peerListeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    @Override
+    public void removePeerListener(PeerListener listener) {
+        peerListeners.remove(listener);
+    }
+
+    /** Tell every peer listener, absorbing a fault in one so it neither refuses the peer nor silences the rest. */
+    private void announce(PeerId peer, boolean connected) {
+        for (PeerListener listener : peerListeners) {
+            try {
+                if (connected) {
+                    listener.onConnected(peer);
+                } else {
+                    listener.onDisconnected(peer);
+                }
+            } catch (RuntimeException e) {
+                // stderr, as the transports report: this module has no logger, and a fault nobody hears about is
+                // the failure this reporting exists to prevent.
+                System.err.println("[elektroq] conduit '" + name + "': a peer listener failed on peer "
+                        + peer.handle() + (connected ? " connecting" : " disconnecting") + ": " + e);
+            }
+        }
     }
 
     @Override
@@ -209,6 +238,7 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
     @Override
     public void onConnected(PeerId peer) {
         peers.add(peer);
+        announce(peer, true);
     }
 
     @Override
@@ -221,6 +251,7 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
                 waiter.future().completeExceptionally(cause);
             }
         });
+        announce(peer, false);
     }
 
     // --- emit / request internals -----------------------------------------------

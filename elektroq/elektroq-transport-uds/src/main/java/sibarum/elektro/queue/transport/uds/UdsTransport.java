@@ -42,6 +42,15 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>The endpoint is a filesystem {@link Path} (the socket file). A {@link #listening} transport
  * binds and, on {@link #close()}, deletes that file; a {@link #connecting} transport dials it.
  *
+ * <p><b>A socket file a crash left behind</b> would make the next bind fail with "address already in use". A
+ * listener that finds the path taken dials it first: if nobody answers, the file is stale, so it is deleted and the
+ * bind tried again. If somebody answers, the path is in use and the start fails, as before. A regular file or a
+ * directory at the path is never deleted.
+ *
+ * <p><b>A peer that stops reading</b> fills its receive buffer, and a write to it then blocks — by default for ever,
+ * holding that connection's write lock. {@link #sendTimeout} bounds it: a write still blocked after the timeout
+ * drops the peer, so the send fails, the peer is reported disconnected, and the sender is free again.
+ *
  * <p>Availability: Unix domain sockets require JDK 16+ and an OS with {@code AF_UNIX} support
  * (Linux, macOS, and Windows 10/11). Pure NIO — no reflection, native-image clean.
  */
@@ -67,10 +76,25 @@ public final class UdsTransport implements Transport {
     private volatile PeerListener peerListener = NO_PEER_LISTENER;
     private volatile ServerSocketChannel serverChannel;
     private volatile boolean closed;
+    /** How long one write may block before its peer is dropped; 0 for no bound. */
+    private volatile long sendTimeoutNanos;
 
     private UdsTransport(Mode mode, Path socketPath) {
         this.mode = mode;
         this.socketPath = socketPath;
+    }
+
+    /**
+     * Bound how long a send may block on one peer: a write still blocked after {@code timeout} drops that peer,
+     * so the send throws, {@code onDisconnected} follows, and nothing else waits behind it. {@code null} or zero for
+     * no bound, the default. Set before {@link #start()}.
+     */
+    public UdsTransport sendTimeout(java.time.Duration timeout) {
+        if (timeout != null && timeout.isNegative()) {
+            throw new IllegalArgumentException("sendTimeout must not be negative, was " + timeout);
+        }
+        this.sendTimeoutNanos = timeout == null ? 0L : timeout.toNanos();
+        return this;
     }
 
     /** A server transport that binds the socket file at {@code socketPath}. */
@@ -97,14 +121,18 @@ public final class UdsTransport implements Transport {
         try {
             UnixDomainSocketAddress address = UnixDomainSocketAddress.of(socketPath);
             if (mode == Mode.LISTENING) {
-                ServerSocketChannel channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
-                channel.bind(address);
-                this.serverChannel = channel;
+                this.serverChannel = bind(address);
                 threads.submit(this::acceptLoop);
+                if (sendTimeoutNanos > 0) {
+                    threads.submit(this::watchWrites);
+                }
             } else {
                 SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX);
                 channel.connect(address);
                 register(channel);
+                if (sendTimeoutNanos > 0) {
+                    threads.submit(this::watchWrites);
+                }
             }
             started.complete(null);
         } catch (IOException e) {
@@ -165,6 +193,56 @@ public final class UdsTransport implements Transport {
     }
 
     // --- internals --------------------------------------------------------------
+
+    /**
+     * Bind {@code address}, first clearing a socket file a crashed listener left there. The file is stale only if
+     * nobody answers a dial to it, and only a socket file is ever deleted.
+     */
+    private ServerSocketChannel bind(UnixDomainSocketAddress address) throws IOException {
+        ServerSocketChannel channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
+        try {
+            channel.bind(address);
+            return channel;
+        } catch (java.net.BindException taken) {
+            if (!Files.exists(socketPath) || Files.isRegularFile(socketPath) || Files.isDirectory(socketPath)) {
+                closeQuietly(channel);
+                throw taken;
+            }
+            try (SocketChannel probe = SocketChannel.open(StandardProtocolFamily.UNIX)) {
+                probe.connect(address);
+                closeQuietly(channel);
+                throw new java.net.BindException("Address already in use: a listener answers at " + socketPath);
+            } catch (java.net.ConnectException refused) {
+                // Nobody home: the file is what a crash leaves behind.
+                Files.deleteIfExists(socketPath);
+            }
+            channel.bind(address);
+            return channel;
+        }
+    }
+
+    /**
+     * Drop any peer whose write has been blocked for longer than the send timeout. Closing its channel ends the
+     * blocked write with an exception, which {@link Connection#write} turns into the timeout's own message.
+     */
+    private void watchWrites() {
+        long period = Math.max(1_000_000L, sendTimeoutNanos / 4);
+        while (!closed) {
+            try {
+                java.util.concurrent.locks.LockSupport.parkNanos(period);
+                long now = System.nanoTime();
+                for (Connection connection : connections.values()) {
+                    long since = connection.writingSince;
+                    if (since != 0 && now - since > sendTimeoutNanos) {
+                        connection.timedOut = true;
+                        connection.closeQuietly();
+                    }
+                }
+            } catch (RuntimeException e) {
+                fault("the send-timeout watch faulted", e);
+            }
+        }
+    }
 
     /**
      * Accepts until the transport is closed.
@@ -310,6 +388,10 @@ public final class UdsTransport implements Transport {
         private final DataInputStream in;
         private final DataOutputStream out;
         private final Object writeLock = new Object();
+        /** When the write in progress began, by {@link System#nanoTime()}; 0 when none is. */
+        volatile long writingSince;
+        /** Set by the watch when it dropped this peer for a write that did not finish in time. */
+        volatile boolean timedOut;
 
         Connection(PeerId peer, SocketChannel channel) throws IOException {
             this.peer = peer;
@@ -320,14 +402,21 @@ public final class UdsTransport implements Transport {
 
         void write(byte[] frame) {
             synchronized (writeLock) {
+                writingSince = Math.max(1L, System.nanoTime());
                 try {
                     out.writeInt(frame.length);
                     out.write(frame);
                     out.flush();
                 } catch (IOException e) {
                     closeQuietly();
+                    if (timedOut) {
+                        throw new ElektroException("Send to peer " + peer.handle() + " timed out after "
+                                + sendTimeoutNanos / 1_000_000L + " ms; the peer was dropped", e);
+                    }
                     throw new ElektroException(
                             "Failed to send to peer " + peer.handle() + ": " + e.getMessage(), e);
+                } finally {
+                    writingSince = 0L;
                 }
             }
         }

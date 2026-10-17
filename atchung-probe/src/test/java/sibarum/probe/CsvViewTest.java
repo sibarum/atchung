@@ -126,6 +126,24 @@ class CsvViewTest {
         assertEquals("16ms", gaps.get(1).park().detail());
     }
 
+    /**
+     * Frame to frame is the park plus the next frame's work. A loop idling on a 200ms floor shows 200.7ms gaps, and
+     * the 0.7ms the park does not cover is the next frame being drawn, not a stall — found on the gui demo, where
+     * the first version of this rule called every idle frame a stall.
+     */
+    @Test
+    void theNextFramesOwnWorkIsNotAStall(@TempDir Path dir) throws IOException {
+        Path file = new Log()
+                .frame(0).park(0, "200ms")
+                .row(201, "main", "frame", "frame", "0.70ms")
+                .frame(201)
+                .write(dir, "idle-floor.csv");
+
+        String out = CsvView.gaps(CsvView.read(file), 100);
+        assertTrue(out.contains("expected - parked on 200ms"), out);
+        assertFalse(out.contains("STALL"), out);
+    }
+
     @Test
     void aRunWithNoGapsSaysSoRatherThanPrintingNothing(@TempDir Path dir) throws IOException {
         Path file = new Log().frame(0).frame(16).frame(32).write(dir, "smooth.csv");

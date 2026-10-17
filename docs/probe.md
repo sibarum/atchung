@@ -235,6 +235,12 @@ looking, so without it a thirty-second doze and a thirty-second hang are the sam
 the park that precedes it is expected, and a gap that is not is a stall — and the row before it is the
 suspect, which is the whole reason the log is one file in time order rather than several.
 
+"Covered" is judged against the same threshold the hunt uses. Frame to frame is the park *and* the next frame's
+own work, so a loop idling on a 200 ms floor shows gaps of 200.7 ms; the 0.7 ms the park leaves uncovered is a
+frame being drawn, not a silence. A gap is a stall when nothing said the loop would sleep, or when the part the
+park does not cover is itself at least the threshold. (The first version compared the budget with the whole gap
+and called every idle frame on the gui demo a stall.)
+
 ```
 1 gap of 100ms or more:
 

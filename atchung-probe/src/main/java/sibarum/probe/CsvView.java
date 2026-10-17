@@ -71,28 +71,44 @@ public final class CsvView {
      * @param to   the {@code frame.present} that closed it
      * @param park the first {@code loop.park} at or after {@code from} and no later than {@code to}, or
      *             {@code null} when nothing said the loop was going to sleep
+     * @param thresholdNanos the shortest silence being hunted: the gap is at least this long, and the part of it the
+     *             park leaves uncovered is judged against the same figure
      */
-    public record Gap<R extends Stamped>(R from, R last, R to, R park) {
+    public record Gap<R extends Stamped>(R from, R last, R to, R park, long thresholdNanos) {
 
         public long nanos() {
             return to.monoNanos() - from.monoNanos();
+        }
+
+        /**
+         * The part of the gap the park does not account for: all of it with no park, none of it under
+         * {@code forever}. Frame to frame is the park <em>and</em> the next frame's own work, so a loop that slept
+         * exactly as long as it said still leaves that work uncovered — a fraction of a millisecond, which is not a
+         * stall. Only an uncovered stretch as long as the threshold is a silence worth reporting.
+         */
+        public long uncoveredNanos() {
+            if (park == null) {
+                return nanos();
+            }
+            long budget = parkBudgetNanos(park.detail());
+            return budget == Long.MAX_VALUE ? 0L : Math.max(0L, nanos() - budget);
         }
 
         public Verdict verdict() {
             if (park == null) {
                 return Verdict.NO_PARK;
             }
-            return parkBudgetNanos(park.detail()) >= nanos() ? Verdict.EXPECTED : Verdict.SHORT_PARK;
+            return uncoveredNanos() < thresholdNanos ? Verdict.EXPECTED : Verdict.SHORT_PARK;
         }
     }
 
     /** What a gap was, by the park before it. */
     public enum Verdict {
-        /** Covered by the park: the loop slept as long as it said it would. */
+        /** Covered by the park: the loop slept as long as it said it would, give or take less than the threshold. */
         EXPECTED(false),
         /** A stall: nothing said the loop was going to sleep. */
         NO_PARK(true),
-        /** A stall: the loop parked, but on a budget shorter than the silence. */
+        /** A stall: the loop parked, but what the park leaves uncovered is itself a silence over the threshold. */
         SHORT_PARK(true);
 
         private final boolean stall;
@@ -258,14 +274,14 @@ public final class CsvView {
                 continue;
             }
             if (previous >= 0 && row.monoNanos() - rows.get(previous).monoNanos() >= thresholdNanos) {
-                found.add(judge(rows, previous, i));
+                found.add(judge(rows, previous, i, thresholdNanos));
             }
             previous = i;
         }
         return found;
     }
 
-    private static <R extends Stamped> Gap<R> judge(List<R> rows, int fromAt, int toAt) {
+    private static <R extends Stamped> Gap<R> judge(List<R> rows, int fromAt, int toAt, long thresholdNanos) {
         R from = rows.get(fromAt);
         R to = rows.get(toAt);
         // The park that covers this gap is the one recorded with the frame that opened it: the loop presents,
@@ -286,7 +302,7 @@ public final class CsvView {
                 last = r;
             }
         }
-        return new Gap<>(from, last, to, park);
+        return new Gap<>(from, last, to, park, thresholdNanos);
     }
 
     private static String report(Gap<Row> gap) {

@@ -102,6 +102,30 @@ class CsvViewTest {
         assertTrue(out.contains("does not cover it"), out);
     }
 
+    /** The rule over rows that never were a file: what a live sink keeps in memory reads the same verdicts. */
+    @Test
+    void theGapRuleJudgesRowsHeldInMemory() {
+        record Held(long monoNanos, String kind, String detail) implements CsvView.Stamped {
+        }
+        long ms = 1_000_000L;
+        List<Held> rows = List.of(
+                new Held(0, "frame.present", "#1"), new Held(1 * ms, "loop.park", "forever"),
+                new Held(500 * ms, "frame.present", "#2"), new Held(501 * ms, "loop.park", "16ms"),
+                new Held(600 * ms, "save", "writing 40MB"),
+                new Held(900 * ms, "frame.present", "#3"),
+                new Held(910 * ms, "frame.present", "#4"));
+
+        List<CsvView.Gap<Held>> gaps = CsvView.gapsOf(rows, 100 * ms);
+
+        assertEquals(2, gaps.size(), gaps.toString());
+        assertEquals(CsvView.Verdict.EXPECTED, gaps.get(0).verdict());
+        assertEquals(500 * ms, gaps.get(0).nanos());
+        assertEquals(CsvView.Verdict.SHORT_PARK, gaps.get(1).verdict());
+        assertTrue(gaps.get(1).verdict().stall());
+        assertEquals("writing 40MB", gaps.get(1).last().detail());
+        assertEquals("16ms", gaps.get(1).park().detail());
+    }
+
     @Test
     void aRunWithNoGapsSaysSoRatherThanPrintingNothing(@TempDir Path dir) throws IOException {
         Path file = new Log().frame(0).frame(16).frame(32).write(dir, "smooth.csv");

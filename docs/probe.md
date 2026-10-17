@@ -212,6 +212,12 @@ Missing sequence numbers are reported on stderr first and unconditionally. Every
 from the rows that are present, so a reader who is not told about the missing ones is being invited to
 conclude something from a hole.
 
+The gap rule is also there as values, for rows that never were a file: `CsvView.gapsOf(rows, thresholdNanos)`
+returns one `Gap` per silence (the frame before it, the suspect inside it, the frame after, the park meant to cover
+it, and a `Verdict`), over anything that implements `CsvView.Stamped`. `--gaps` is that list printed; the
+automation socket's `gaps` verb (vexelray-gui, over the rows a live sink keeps) is the same list printed its own
+way, so the two cannot disagree about what a stall is.
+
 ### The gap hunt
 
 The highest-value question this format serves, and the one thing `awk` cannot answer on its own, because **a

@@ -42,29 +42,94 @@ import java.util.Locale;
  */
 public final class CsvView {
 
+    /**
+     * What the gap rule reads of a row: when it happened, what it was, and what it said. A parsed file's
+     * {@link Row} is one; so is a row held in memory by something that took it live ({@link LiveSink}), which is
+     * why the rule is written against this and not against {@link Row} — one rule, whatever the rows came from.
+     */
+    public interface Stamped {
+
+        /** The row's {@code t_mono_ns}. */
+        long monoNanos();
+
+        String kind();
+
+        String detail();
+    }
+
     /** One row, parsed. {@code detail} keeps whatever the producer put there. */
     public record Row(long seq, long monoNanos, String wall, String thread, String lane, String kind,
-                      String detail, String raw) {
+                      String detail, String raw) implements Stamped {
+    }
 
-        boolean isFrame() {
-            return kind.equals("frame.present");
+    /**
+     * One silence between frames, judged: the frame before it, the last thing that happened inside it, the frame
+     * that ended it, and the park that was meant to cover it.
+     *
+     * @param from the {@code frame.present} that opened the gap
+     * @param last the last row strictly inside the gap — the suspect in a stall — or {@code null} if nothing was
+     * @param to   the {@code frame.present} that closed it
+     * @param park the first {@code loop.park} at or after {@code from} and no later than {@code to}, or
+     *             {@code null} when nothing said the loop was going to sleep
+     */
+    public record Gap<R extends Stamped>(R from, R last, R to, R park) {
+
+        public long nanos() {
+            return to.monoNanos() - from.monoNanos();
         }
 
-        boolean isPark() {
-            return kind.equals("loop.park");
+        public Verdict verdict() {
+            if (park == null) {
+                return Verdict.NO_PARK;
+            }
+            return parkBudgetNanos(park.detail()) >= nanos() ? Verdict.EXPECTED : Verdict.SHORT_PARK;
+        }
+    }
+
+    /** What a gap was, by the park before it. */
+    public enum Verdict {
+        /** Covered by the park: the loop slept as long as it said it would. */
+        EXPECTED(false),
+        /** A stall: nothing said the loop was going to sleep. */
+        NO_PARK(true),
+        /** A stall: the loop parked, but on a budget shorter than the silence. */
+        SHORT_PARK(true);
+
+        private final boolean stall;
+
+        Verdict(boolean stall) {
+            this.stall = stall;
         }
 
-        /** How long this park was allowed to last, in nanos; {@link Long#MAX_VALUE} for "forever". */
-        long parkBudgetNanos() {
-            String d = detail.trim();
-            if (d.equalsIgnoreCase("forever")) {
-                return Long.MAX_VALUE;
-            }
-            try {
-                return Long.parseLong(d.endsWith("ms") ? d.substring(0, d.length() - 2) : d) * 1_000_000L;
-            } catch (NumberFormatException e) {
-                return 0L;
-            }
+        /** Whether the loop failed to come back, as opposed to sleeping as announced. */
+        public boolean stall() {
+            return stall;
+        }
+    }
+
+    /** Whether {@code row} is the heartbeat the gap rule measures between. */
+    public static boolean isFrame(Stamped row) {
+        return row.kind().equals("frame.present");
+    }
+
+    /** Whether {@code row} says the loop went to sleep, and for how long it was allowed to. */
+    public static boolean isPark(Stamped row) {
+        return row.kind().equals("loop.park");
+    }
+
+    /**
+     * How long a park with this detail was allowed to last, in nanos: {@link Long#MAX_VALUE} for
+     * {@code forever}, and 0 for a detail that is not a budget.
+     */
+    public static long parkBudgetNanos(String detail) {
+        String d = detail.trim();
+        if (d.equalsIgnoreCase("forever")) {
+            return Long.MAX_VALUE;
+        }
+        try {
+            return Long.parseLong(d.endsWith("ms") ? d.substring(0, d.length() - 2) : d) * 1_000_000L;
+        } catch (NumberFormatException e) {
+            return 0L;
         }
     }
 
@@ -164,65 +229,83 @@ public final class CsvView {
      * park far shorter than the gap, is the loop failing to come back.
      */
     public static String gaps(List<Row> rows, long thresholdMillis) {
-        long threshold = thresholdMillis * 1_000_000L;
-        StringBuilder sb = new StringBuilder();
-        Row previousFrame = null;
-        int found = 0;
-        for (int i = 0; i < rows.size(); i++) {
-            Row row = rows.get(i);
-            if (!row.isFrame()) {
-                continue;
-            }
-            if (previousFrame != null) {
-                long gap = row.monoNanos() - previousFrame.monoNanos();
-                if (gap >= threshold) {
-                    found++;
-                    sb.append(report(rows, previousFrame, row, gap));
-                }
-            }
-            previousFrame = row;
-        }
-        if (found == 0) {
+        List<Gap<Row>> found = gapsOf(rows, thresholdMillis * 1_000_000L);
+        if (found.isEmpty()) {
             return "no gaps of " + thresholdMillis + "ms or more between frames\n";
         }
-        return sb.insert(0, found + " gap" + (found == 1 ? "" : "s")
-                + " of " + thresholdMillis + "ms or more:\n\n").toString();
+        StringBuilder sb = new StringBuilder();
+        sb.append(found.size()).append(" gap").append(found.size() == 1 ? "" : "s")
+                .append(" of ").append(thresholdMillis).append("ms or more:\n\n");
+        for (Gap<Row> gap : found) {
+            sb.append(report(gap));
+        }
+        return sb.toString();
     }
 
-    private static String report(List<Row> rows, Row from, Row to, long gap) {
+    /**
+     * The gap rule itself, as values: every stretch of at least {@code thresholdNanos} between consecutive
+     * {@code frame.present} rows, with the park that should cover it and the suspect inside it. {@link #gaps} is
+     * this, printed; a reader of rows held in memory asks this and prints them its own way.
+     *
+     * @param rows in time order — {@link #read} sorts a file so, and a live sink receives them so
+     */
+    public static <R extends Stamped> List<Gap<R>> gapsOf(List<R> rows, long thresholdNanos) {
+        List<Gap<R>> found = new ArrayList<>();
+        int previous = -1;
+        for (int i = 0; i < rows.size(); i++) {
+            R row = rows.get(i);
+            if (!isFrame(row)) {
+                continue;
+            }
+            if (previous >= 0 && row.monoNanos() - rows.get(previous).monoNanos() >= thresholdNanos) {
+                found.add(judge(rows, previous, i));
+            }
+            previous = i;
+        }
+        return found;
+    }
+
+    private static <R extends Stamped> Gap<R> judge(List<R> rows, int fromAt, int toAt) {
+        R from = rows.get(fromAt);
+        R to = rows.get(toAt);
         // The park that covers this gap is the one recorded with the frame that opened it: the loop presents,
         // says what budget it is parking on, and then sleeps.
-        Row park = null;
-        for (int i = rows.indexOf(from); i < rows.size() && rows.get(i).monoNanos() <= to.monoNanos(); i++) {
-            if (rows.get(i).isPark()) {
+        R park = null;
+        for (int i = fromAt; i < rows.size() && rows.get(i).monoNanos() <= to.monoNanos(); i++) {
+            if (isPark(rows.get(i))) {
                 park = rows.get(i);
                 break;
             }
         }
-        String verdict;
-        if (park == null) {
-            verdict = "STALL - nothing said the loop was going to sleep";
-        } else if (park.parkBudgetNanos() >= gap) {
-            verdict = "expected - parked on " + park.detail();
-        } else {
-            verdict = "STALL - parked on " + park.detail() + ", which does not cover it";
-        }
-        StringBuilder sb = new StringBuilder();
-        sb.append(String.format(Locale.ROOT, "  %s for %.1fms  [%s]%n",
-                from.wall(), gap / 1e6, verdict));
-        sb.append("    from  ").append(from.raw()).append('\n');
         // The suspect: the last thing that happened before the silence. In a stall it is usually the cause,
         // which is the whole reason the log is one file in time order rather than several.
-        Row last = null;
-        for (Row r : rows) {
+        R last = null;
+        for (int i = fromAt + 1; i < toAt; i++) {
+            R r = rows.get(i);
             if (r.monoNanos() > from.monoNanos() && r.monoNanos() < to.monoNanos()) {
                 last = r;
             }
         }
-        if (last != null) {
-            sb.append("    last  ").append(last.raw()).append('\n');
+        return new Gap<>(from, last, to, park);
+    }
+
+    private static String report(Gap<Row> gap) {
+        String verdict;
+        if (gap.park() == null) {
+            verdict = "STALL - nothing said the loop was going to sleep";
+        } else if (!gap.verdict().stall()) {
+            verdict = "expected - parked on " + gap.park().detail();
+        } else {
+            verdict = "STALL - parked on " + gap.park().detail() + ", which does not cover it";
         }
-        sb.append("    to    ").append(to.raw()).append("\n\n");
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format(Locale.ROOT, "  %s for %.1fms  [%s]%n",
+                gap.from().wall(), gap.nanos() / 1e6, verdict));
+        sb.append("    from  ").append(gap.from().raw()).append('\n');
+        if (gap.last() != null) {
+            sb.append("    last  ").append(gap.last().raw()).append('\n');
+        }
+        sb.append("    to    ").append(gap.to().raw()).append("\n\n");
         return sb.toString();
     }
 

@@ -1,0 +1,21 @@
+capture=calc-full.csv rows=21570 span_s=2.22 frames=57 mean_rows_per_s=9725
+window_ms=1.00000 peak_rows=359 (sliding 373) peak_rows_per_s=373000
+window_ms=10.0000 peak_rows=790 (sliding 937) peak_rows_per_s=93700
+window_ms=100.000 peak_rows=3993 (sliding 4219) peak_rows_per_s=42190
+window_ms=1000.00 peak_rows=11605 (sliding 18688) peak_rows_per_s=18688
+csv_stream_bytes_per_row=90.7 detail_chars_per_row=4.7 threads=8 kinds=54
+rows_by_lane={TIME=516, STATE=1497, FRAME=463, BUS=16989, LAYOUT=345, APP=526, INPUT=867, GPU=250, DRAW=117}
+capture=calc-full2.csv rows=160741 span_s=4.65 frames=383 mean_rows_per_s=34536
+window_ms=1.00000 peak_rows=413 (sliding 447) peak_rows_per_s=447000
+window_ms=10.0000 peak_rows=2599 (sliding 2871) peak_rows_per_s=287100
+window_ms=100.000 peak_rows=7740 (sliding 9476) peak_rows_per_s=94760
+window_ms=1000.00 peak_rows=62173 (sliding 68498) peak_rows_per_s=68498
+csv_stream_bytes_per_row=102.3 detail_chars_per_row=4.3 threads=8 kinds=54
+rows_by_lane={TIME=3450, STATE=4144, FRAME=2661, BUS=141562, LAYOUT=1771, APP=1645, INPUT=2889, GPU=1671, DRAW=948}
+capture=calculator.csv rows=1876 span_s=4.86 frames=43 mean_rows_per_s=386
+window_ms=1.00000 peak_rows=58 (sliding 58) peak_rows_per_s=58000
+window_ms=10.0000 peak_rows=182 (sliding 224) peak_rows_per_s=22400
+window_ms=100.000 peak_rows=303 (sliding 330) peak_rows_per_s=3300
+window_ms=1000.00 peak_rows=810 (sliding 917) peak_rows_per_s=917
+csv_stream_bytes_per_row=83.4 detail_chars_per_row=6.0 threads=6 kinds=49
+rows_by_lane={TIME=390, STATE=64, FRAME=285, BUS=679, LAYOUT=111, APP=41, INPUT=139, GPU=110, DRAW=57}

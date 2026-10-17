@@ -1,0 +1,31 @@
+runtime=Substrate VM 25.0.3 (native image)
+os=Windows 11 10.0
+dir=C:\Users\User\AppData\Local\Temp (32 chars)
+path.max_ok_chars=106
+path.first_error=len=107 java.net.SocketException: Unix domain path too long
+stale.file_left_after_raw_close=true
+stale.rebind=refused: BindException: Address already in use: bind
+stale.rebind_after_delete=ok
+stale.file_after_close=false
+dial.nobody=refused: ConnectException: Connection refused: connect
+uds.bound=C:\Users\User\AppData\Local\Temp\vx-21828.sock exists=true isRegular=false
+uds.connect_us=99
+uds.server_sees_peer=1
+uds.one_way=received
+uds.request_reply=p50=30.3us p99=75.6us max=753.1us (last 10000 of 20000)
+uds.server_detects_client_close_us=99
+uds.client_detects_server_close_us=452
+uds.inflight_request_on_server_close=failed after 0ms: ElektroException: Peer 1 disconnected before replying
+uds.file_after_server_close=false
+uds.space.bound=C:\Users\User\AppData\Local\Temp\with space 21828.sock exists=true isRegular=false
+uds.space.connect_us=56
+uds.space.server_sees_peer=1
+uds.space.one_way=received
+uds.space.request_reply=p50=28.4us p99=68.4us max=197.2us (last 10000 of 20000)
+uds.space.server_detects_client_close_us=45
+uds.space.client_detects_server_close_us=449
+uds.space.inflight_request_on_server_close=failed after 0ms: ElektroException: Peer 1 disconnected before replying
+uds.space.file_after_server_close=false
+tcp.request_reply=p50=40.9us p99=121.5us max=510.9us (last 10000 of 20000)
+done=ok
+

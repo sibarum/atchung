@@ -1,0 +1,540 @@
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE
+resize 900x700
+settle
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+type 12345+6789*3/7-
+key ENTER
+settle
+resize 1300x900
+settle
+zoom 1.25
+settle
+zoom 1
+type 2^10+1/3
+key ENTER
+settle
+key ESCAPE

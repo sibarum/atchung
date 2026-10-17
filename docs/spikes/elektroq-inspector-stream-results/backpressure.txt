@@ -1,0 +1,24 @@
+--- RowBatch as intrabuf text (5 rows) ---
+#intrabuf 1 inspector.RowBatch 1.0 BACKWARD id=0x00000384 fp=0xf63b65e9 snapshot
+sentNanos,lostFrom,lostTo,rows
+0,0,0,[&1,&2,&3,&4,&5]
+
+#message inspector.Row 1.0
+&,seq,tMonoNs,tWallNs,frame,thread,lane,kind,detail
+&1,2001,278919700,1792272968127743800,0,main,BUS,vexelray.gui.mutations,5.7us
+&2,2002,278926900,1792272968127743800,0,main,BUS,vexelray.gui.mutations depth,153
+&3,2003,278933600,1792272968127743800,0,main,BUS,vexelray.gui.mutations,6.4us
+&4,2004,278940100,1792272968127743800,0,main,BUS,vexelray.gui.mutations depth,154
+&5,2005,278946700,1792272968127743800,0,main,BUS,vexelray.gui.mutations,5.9us
+
+--- RowColumns as intrabuf text (5 rows) ---
+#intrabuf 1 inspector.RowColumns 1.0 BACKWARD id=0x00000385 fp=0x745c7907 snapshot
+sentNanos,lostFrom,lostTo,firstSeq,tMonoDelta,tWallDelta,frameDelta,thread,lane,kind,detail
+0,0,0,2001,[278919700,7200,6700,6500,6600],[1792272968127743800,0,0,0,0],[0,0,0,0,0],[main,main,main,main,main],[BUS,BUS,BUS,BUS,BUS],[vexelray.gui.mutations,vexelray.gui.mutations depth,vexelray.gui.mutations,vexelray.gui.mutations depth,vexelray.gui.mutations],[5.7us,153,6.4us,154,5.9us]
+
+text_round_trip_rows=5
+emit #0 blocked 1.5 ms (after 0.0 MB sent)
+emit #5 blocked 2995.8 ms (after 0.1 MB sent)
+stall: 6 batches in 2.5 s, worst single emit 2995.8 ms, ~0.1 MB buffered before blocking
+emit_after_peer_gone=ElektroException: No connected peer with id 1
+broadcast_to_nobody=no error

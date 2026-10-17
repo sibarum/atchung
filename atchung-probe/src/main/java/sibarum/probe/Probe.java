@@ -95,8 +95,21 @@ public final class Probe {
     /**
      * The row number, so that loss is detectable. Not the sort key — {@code t_mono_ns} is — but a gap in this
      * is the difference between "nothing happened here" and "we did not hear about it".
+     *
+     * <p>Guarded by {@link #SINK}'s monitor, and taken inside it, so that the order rows are written in is the
+     * order they are numbered in. Numbered outside it, two threads could write {@code 8} before {@code 7}, and a
+     * reader counting gaps as it goes — the live sinks' whole loss signal — would count one that is not there.
      */
-    private static final java.util.concurrent.atomic.AtomicLong SEQ = new java.util.concurrent.atomic.AtomicLong();
+    private static long seq;
+
+    /** The {@link LiveSink}s, copied on write. Guarded by {@link #SINK}'s monitor, like everything they are fed. */
+    private static Attached[] live = new Attached[0];
+
+    /** Rows a live sink threw on, across all of them. Guarded by {@link #SINK}'s monitor. */
+    private static long liveFailures;
+
+    /** Set while the live sinks are being fed, so a sink that emits a row of its own cannot recurse into itself. */
+    private static boolean delivering;
 
     /** Spans at or over this many nanoseconds are printed the moment they close, in any mode. 0 disables. */
     static final long SLOW_NANOS;
@@ -253,6 +266,72 @@ public final class Probe {
         return ON && lane.on;
     }
 
+    // --- live sinks --------------------------------------------------------
+
+    /**
+     * Hand {@code sink} every row from now on, alongside the output — the same rows, in the same order, under the
+     * same {@code seq}, whatever the format. See {@link LiveSink} for what a row is and what a sink may do.
+     *
+     * <p>Rows are delivered to sinks in the order they were attached. Attaching the same sink twice attaches it
+     * once. The first row it is given is the first row written after this returns.
+     *
+     * @return whether rows will be delivered: {@code false} when the probe is off, in which case attaching is
+     *         harmless and nothing ever arrives — there are no rows to deliver
+     */
+    public static boolean attach(LiveSink sink) {
+        if (sink == null) {
+            throw new NullPointerException("sink");
+        }
+        if (!ON) {
+            return false;
+        }
+        synchronized (SINK) {
+            for (Attached a : live) {
+                if (a.sink == sink) {
+                    return true;
+                }
+            }
+            Attached[] next = java.util.Arrays.copyOf(live, live.length + 1);
+            next[live.length] = new Attached(sink);
+            live = next;
+        }
+        return true;
+    }
+
+    /**
+     * Stop handing rows to {@code sink}. Once this returns it is given no more. A sink that was never attached,
+     * or is attached while the probe is off, is ignored.
+     */
+    public static void detach(LiveSink sink) {
+        if (!ON || sink == null) {
+            return;
+        }
+        synchronized (SINK) {
+            for (int i = 0; i < live.length; i++) {
+                if (live[i].sink == sink) {
+                    Attached[] next = new Attached[live.length - 1];
+                    System.arraycopy(live, 0, next, 0, i);
+                    System.arraycopy(live, i + 1, next, i, live.length - i - 1);
+                    live = next;
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * Rows a live sink threw on, summed over every sink since the process started. Each was dropped for the sink
+     * that threw and for no other; the sink saw it as a gap in {@code seq}.
+     */
+    public static long liveSinkFailures() {
+        if (!ON) {
+            return 0L;
+        }
+        synchronized (SINK) {
+            return liveFailures;
+        }
+    }
+
     // --- internals ---------------------------------------------------------
 
     /** Called by {@link Zone#close}: trace the span, or print it if it blew the {@code probe.slow} threshold. */
@@ -284,8 +363,72 @@ public final class Probe {
      * here, which is the point: a second place that formats an event is a second format to keep in step.
      */
     private static void emit(Lane lane, String kind, String detail) {
-        SINK.line(CSV ? csv(lane, kind, detail)
-                : prefix(lane) + kind + (detail == null || detail.isEmpty() ? "" : " " + detail));
+        String d = detail == null ? "" : detail;
+        String thread = Thread.currentThread().getName();
+        // Everything that does not depend on the row's place in the sequence is built before the lock: the
+        // quoting, the text line, the formatted wall clock. Only the number and the monotonic stamp are taken
+        // inside it, which is what makes seq, t_mono_ns and the file's own order agree.
+        long wallNs = 0L;
+        String text;
+        if (CSV) {
+            Instant wall = Instant.now();
+            wallNs = epochNanos(wall);
+            text = "," + wall + "," + tail(thread, lane, kind, d);
+        } else {
+            text = prefix(lane) + kind + (d.isEmpty() ? "" : " " + d);
+        }
+        synchronized (SINK) {
+            long n = ++seq;
+            long mono = System.nanoTime() - ORIGIN;
+            SINK.line(CSV ? n + "," + mono + text : text);
+            Attached[] sinks = live;
+            if (sinks.length > 0 && !delivering) {
+                deliver(sinks, n, mono, CSV ? wallNs : epochNanos(Instant.now()), thread, lane, kind, d);
+            }
+        }
+    }
+
+    /**
+     * Hand one row to every live sink, under the output's lock. A sink that throws loses this row and nothing
+     * else: the others still get it, the app never sees the exception, and the next row the sink is given says
+     * what it missed by its {@code seq}. The failure is counted every time and reported once per sink.
+     */
+    private static void deliver(Attached[] sinks, long n, long mono, long wallNs, String thread, Lane lane,
+                                String kind, String detail) {
+        delivering = true;
+        try {
+            for (Attached a : sinks) {
+                try {
+                    a.sink.row(n, mono, wallNs, thread, lane, kind, detail);
+                } catch (Throwable t) {
+                    // Throwable, not Exception: the contract is that nothing here throws, and a sink's
+                    // AssertionError or StackOverflowError at a call site is still a crash the probe caused.
+                    liveFailures++;
+                    if (!a.reported) {
+                        a.reported = true;
+                        System.err.println("probe: live sink " + a.sink + " threw on row " + n
+                                + "; dropping that row for it, and reporting no further failures from it");
+                        t.printStackTrace();
+                    }
+                }
+            }
+        } finally {
+            delivering = false;
+        }
+    }
+
+    private static long epochNanos(Instant t) {
+        return t.getEpochSecond() * 1_000_000_000L + t.getNano();
+    }
+
+    /** One attached {@link LiveSink}, and whether its first failure has been reported. */
+    private static final class Attached {
+        final LiveSink sink;
+        boolean reported;
+
+        Attached(LiveSink sink) {
+            this.sink = sink;
+        }
     }
 
     /**
@@ -302,16 +445,16 @@ public final class Probe {
      *
      * <p>{@code thread} and {@code lane} say who and where, {@code kind} says what, and {@code detail} is the
      * producer's own — always last, so a naive split on commas keeps working when it contains one.
+     *
+     * <p>This builds the part from {@code thread} on; {@link #emit} puts {@code seq}, {@code t_mono_ns} and
+     * {@code t_wall} in front of it, the first two under the lock.
      */
-    private static String csv(Lane lane, String kind, String detail) {
-        StringBuilder sb = new StringBuilder(96);
-        sb.append(SEQ.incrementAndGet()).append(',')
-                .append(System.nanoTime() - ORIGIN).append(',')
-                .append(Instant.now()).append(',');
-        field(sb, Thread.currentThread().getName()).append(',');
+    private static String tail(String thread, Lane lane, String kind, String detail) {
+        StringBuilder sb = new StringBuilder(64);
+        field(sb, thread).append(',');
         field(sb, lane.key()).append(',');
         field(sb, kind).append(',');
-        field(sb, detail == null ? "" : detail);
+        field(sb, detail);
         return sb.toString();
     }
 
@@ -467,6 +610,10 @@ public final class Probe {
         counters(sb);
         resources(sb);
         memory(sb);
+        long dropped = liveSinkFailures();
+        if (dropped > 0) {
+            sb.append("-- live sinks: ").append(dropped).append(" row(s) dropped by a sink that threw\n");
+        }
         sb.append("=== end probe ================================================\n");
         return sb.toString();
     }

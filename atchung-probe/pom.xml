@@ -41,6 +41,7 @@
                     </systemPropertyVariables>
                     <excludes>
                         <exclude>**/ProbeCsvTest.java</exclude>
+                        <exclude>**/LiveSink*Test.java</exclude>
                     </excludes>
                 </configuration>
                 <executions>
@@ -61,6 +62,42 @@
                             <excludes combine.self="override"/>
                             <includes>
                                 <include>**/ProbeCsvTest.java</include>
+                                <include>**/LiveSinkCsvTest.java</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                    <!-- A live sink is fed whatever the file's format, so it is tested in the text format as well -
+                         tracing, since an untraced text run emits nothing but slow spans. -->
+                    <execution>
+                        <id>text-trace</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <probe>all</probe>
+                                <probe.trace>true</probe.trace>
+                                <probe.out>target/probe-test-trace.log</probe.out>
+                            </systemPropertyVariables>
+                            <excludes combine.self="override"/>
+                            <includes>
+                                <include>**/LiveSinkTest.java</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                    <!-- And a process that is not profiling at all: attaching there must be harmless. -->
+                    <execution>
+                        <id>off</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <systemPropertyVariables combine.self="override">
+                                <probe>off</probe>
+                            </systemPropertyVariables>
+                            <excludes combine.self="override"/>
+                            <includes>
+                                <include>**/LiveSinkOffTest.java</include>
                             </includes>
                         </configuration>
                     </execution>

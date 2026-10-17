@@ -171,7 +171,8 @@ Four decisions in that row are worth knowing, because reading the file depends o
   outside the process.
 - **`seq` is there so that loss is *detectable*.** A gap that is a dropped line looks exactly like a gap that
   is a stall unless the numbering says which it was. It also breaks ties when two threads land in the same
-  nanosecond.
+  nanosecond. `seq` and `t_mono_ns` are both taken under the writer's lock, so the file's own line order, `seq`
+  order and `t_mono_ns` order agree.
 - **One event is one physical line, always.** RFC 4180 permits a raw newline inside a quoted field, and a
   single stack trace written that way ends the file's usefulness: `sort`, `grep -n` and `awk` stop describing
   events and start describing fragments of them. Newlines are flattened to spaces; commas and quotes are
@@ -241,6 +242,52 @@ suspect, which is the whole reason the log is one file in time order rather than
 test that asserts what its own run recorded is doing the same thing, and would otherwise reimplement it
 slightly differently.
 
+## Reading a run as it happens: live sinks
+
+The file is for afterwards. Code in the same process that wants the rows *now* — the flight recorder behind the
+automation socket, a test asserting what it just caused — attaches a `LiveSink`:
+
+```java
+LiveSink sink = (seq, tMonoNs, tWallNs, thread, lane, kind, detail) -> {
+    int i = (int) (seq & MASK);              // copy into arrays allocated once; nothing else
+    seqs[i] = seq; monos[i] = tMonoNs; kinds[i] = kind; details[i] = detail;
+};
+boolean feeding = Probe.attach(sink);        // false when the probe is off: harmless, and nothing arrives
+...
+Probe.detach(sink);
+long lost = Probe.liveSinkFailures();        // rows a sink threw on, summed over every sink
+```
+
+What a sink is promised:
+
+- **Exactly the file's rows, in the file's order, under the file's `seq`.** Every row the output gets — traced
+  events, and the `SLOW` spans of an untraced run — goes to every attached sink as well, in either format. In
+  the text format the file prints no `seq`, but the rows are numbered all the same. The banner, the header and
+  the rollups are not rows and are not delivered.
+- **`seq` is gapless across the process**, so a gap a sink sees is a row it was not given: it attached late,
+  or it threw. The first row it gets is the first one written after `attach` returns; none arrive after
+  `detach` returns. Attaching the same sink twice attaches it once.
+- **The fields, as arguments, not a row object** — so the hand-off allocates nothing and there is nothing to
+  hold onto by mistake. They are the CSV columns' *values*: `t_wall` as epoch nanoseconds rather than formatted,
+  the `Lane` itself rather than its key, and `detail` exactly as the call site passed it (`""` for none),
+  unquoted and with its line breaks — quoting and flattening are the file's concern. The strings are the ones
+  the probe already built for the line, so keeping a reference is free.
+- **Several sinks**, called in the order they were attached. The set is copied on write and only ever read
+  under the output's lock, so attaching is not on the hot path and delivering takes no lock of its own.
+
+What it asks in return: `row` runs on the emitting thread, **inside the one lock that serialises the output** —
+that is what makes its order the file's order — so every other thread that emits is waiting on it. Copy and
+return. Do not block, do not log, do not call back into `Probe` (a row a sink emits from inside `row` still
+reaches the file, but no sink is handed it).
+
+A sink that throws costs that row and nothing else. The row is dropped for that sink only — the others still
+get it — the failure is counted in `Probe.liveSinkFailures()` and in the rollup, the first failure of each sink
+is printed once on stderr with its stack, and the sink stays attached. It sees what it lost the way any reader
+does: as a gap in `seq`. Nothing a sink does reaches the call site.
+
+`Probe.ON` still decides once, at class load; a live sink does not turn the probe on. Registration is plain
+code — no `ServiceLoader`, no reflection — so it is native-image clean like the rest of the module.
+
 ## Instrumenting new code
 
 ```java
@@ -270,4 +317,6 @@ On: one `System.nanoTime()` pair per span, a `ConcurrentHashMap` lookup on a bar
 so no key has to be composed), and lock-free adders. Zones are **pooled per thread and per nesting depth** and
 never allocated — a profiler that allocates on the path it is measuring changes the allocation rate it was
 installed to explain. Output is serialised on the sink, which is a lock taken once per traced line and once per
-report, never per span.
+report, never per span. Live sinks are fed inside that same lock and add no lock and no allocation of their own;
+the only extra work per row is the calls themselves, plus reading the wall clock in the text format (the CSV
+reads it anyway). With no sink attached, the cost is one array-length check.

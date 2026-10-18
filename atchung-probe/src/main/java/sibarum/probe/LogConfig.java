@@ -271,9 +271,13 @@ public record LogConfig(String app, Mode mode, Level console, Level file, Map<St
                 problems.add("log.mode=" + named + " is not one of test, automation, dev, packaged");
             }
         }
-        String automation = get.apply("automation");
-        if (automation != null && !automation.equalsIgnoreCase("off") && !automation.equalsIgnoreCase("false")) {
-            return Mode.AUTOMATION;
+        // Either socket asked for at launch, or both: control alone is a driven run, and diagnostics alone is the one
+        // run that most needs the probe the mode turns on, since the probe cannot be armed after it loads.
+        for (String key : new String[] {"automation", "automation.control", "automation.diagnostics"}) {
+            String automation = get.apply(key);
+            if (automation != null && !automation.equalsIgnoreCase("off") && !automation.equalsIgnoreCase("false")) {
+                return Mode.AUTOMATION;
+            }
         }
         if (env.testRun()) {
             return Mode.TEST;

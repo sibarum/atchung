@@ -72,6 +72,15 @@ class LogConfigTest {
     }
 
     @Test
+    void eitherSocketAloneIsADrivenRunAndArmsTheProbe() {
+        assertEquals("frame,input,layout,app",
+                resolve(Map.of("automation.diagnostics", "0"), false, false, true).probeLanes());
+        assertEquals(Mode.AUTOMATION, resolve(Map.of("automation.control", "7654"), false, false, true).mode());
+        assertEquals(Mode.DEV, resolve(Map.of("automation.control", "off", "automation.diagnostics", "false"),
+                false, false, true).mode());
+    }
+
+    @Test
     void automationSetToOffIsNotAutomation() {
         assertEquals(Mode.DEV, resolve(Map.of("automation", "off"), false, false, true).mode());
         assertEquals(Mode.DEV, resolve(Map.of("automation", "false"), false, false, true).mode());

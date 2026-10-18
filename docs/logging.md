@@ -117,7 +117,7 @@ the data* (a path chosen, a fallback taken and why; never a document, a token, a
 
 **Names are dotted and hierarchical, and name a subsystem rather than a class** when they can: `gui.frame`, not
 `GuiApp`. A level is something a person types on a command line, and they should not have to know which class does
-the work. Existing names: `log` (the banner), `uncaught`, `vexelray.diag`, `framework.{app,shell,input,faults,automation}`,
+the work. Existing names: `log` (the banner), `uncaught`, `vexelray.diag`, `framework.{app,shell,input,faults,automation,wiring}`,
 `gui`, `gui.app`, `gui.window`, `gui.window.memory`, `automation.server`, `vulkan.swapchain`, `vulkan.present`.
 
 `gui.app` says at `DEBUG` what the frame ceiling is and when it changes (*frame ceiling follows the display: 6944 us a

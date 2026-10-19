@@ -57,6 +57,20 @@ public final class Pump {
     }
 
     /**
+     * As {@link #subscribe(Topic, Subscriber, int)}, into a mailbox named {@code mailbox}.
+     *
+     * <p>A named mailbox writes three more rows on the probe's {@code bus} lane — {@code enqueue}, {@code deliver}
+     * and {@code drop}, each with the name first in its detail — so that a reader can say which mailbox a message
+     * reached, and not only which topic it was published on. For a declared subscriber the name is its
+     * {@code class#method}. See docs/probe.md for the rows.
+     *
+     * @param mailbox the mailbox's name, or {@code null} for an unnamed one; non-empty and holding no space
+     */
+    public <T> Subscription subscribe(String mailbox, Topic<T> topic, Subscriber<T> subscriber, int capacity) {
+        return subscribe(mailbox, topic, subscriber, capacity, Backpressure.FAIL);
+    }
+
+    /**
      * Subscribe with pumped delivery: events queue into a bounded mailbox and are delivered on the
      * thread that calls {@link #drain()}.
      *
@@ -66,6 +80,15 @@ public final class Pump {
     public <T> Subscription subscribe(Topic<T> topic, Subscriber<T> subscriber,
                                       int capacity, Backpressure backpressure) {
         return subscribe(topic, subscriber, capacity, backpressure, null);
+    }
+
+    /**
+     * As {@link #subscribe(Topic, Subscriber, int, Backpressure)}, into a mailbox named {@code mailbox}. See
+     * {@link #subscribe(String, Topic, Subscriber, int)} for what the name buys.
+     */
+    public <T> Subscription subscribe(String mailbox, Topic<T> topic, Subscriber<T> subscriber,
+                                      int capacity, Backpressure backpressure) {
+        return subscribe(mailbox, topic, subscriber, capacity, backpressure, null);
     }
 
     /**
@@ -81,11 +104,27 @@ public final class Pump {
      */
     public <T> Subscription subscribe(Topic<T> topic, Subscriber<T> subscriber,
                                       int capacity, Backpressure backpressure, Fold<T> fold) {
+        return subscribe(null, topic, subscriber, capacity, backpressure, fold);
+    }
+
+    /**
+     * As {@link #subscribe(Topic, Subscriber, int, Backpressure, Fold)}, into a mailbox named {@code mailbox}. See
+     * {@link #subscribe(String, Topic, Subscriber, int)} for what the name buys.
+     */
+    public <T> Subscription subscribe(String mailbox, Topic<T> topic, Subscriber<T> subscriber,
+                                      int capacity, Backpressure backpressure, Fold<T> fold) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(subscriber, "subscriber");
         Objects.requireNonNull(backpressure, "backpressure");
+        if (mailbox != null && (mailbox.isEmpty() || mailbox.indexOf(' ') >= 0)) {
+            // A row puts the name in front of a number or a policy, and a reader splits it off at the space; a
+            // name that is blank or holds one would read back as some other mailbox.
+            throw new IllegalArgumentException("a mailbox name must be non-empty and hold no space: '"
+                    + mailbox + "'");
+        }
 
-        PumpedReg<T> reg = new PumpedReg<>(topic, subscriber, capacity, backpressure, fold, this::arrived);
+        PumpedReg<T> reg = new PumpedReg<>(mailbox, topic, subscriber, capacity, backpressure, fold,
+                this::arrived);
         regs.add(reg);
         Subscription busSub = bus.register(reg);
         return new PumpSubscription(reg, busSub);

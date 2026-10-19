@@ -28,4 +28,40 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <!-- The probe decides whether it is on once, in a static initialiser, so the rows a mailbox writes are
+                 tested in a JVM of their own, started profiling and tracing in the CSV format. Everything else runs
+                 with the probe off, which is how most processes run. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/MailboxRowsTest.java</exclude>
+                    </excludes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>probe</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <systemPropertyVariables>
+                                <probe>all</probe>
+                                <probe.format>csv</probe.format>
+                                <probe.out>target/probe-test.csv</probe.out>
+                            </systemPropertyVariables>
+                            <excludes combine.self="override"/>
+                            <includes>
+                                <include>**/MailboxRowsTest.java</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

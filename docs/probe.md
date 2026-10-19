@@ -124,6 +124,33 @@ Three rows are worth knowing by name:
 - **`<topic> depth`** in the counter table — a pumped mailbox's occupancy at publish time. Read the `max`
   column. A mailbox that averaged 2 and once reached its capacity is one publish away from dropping, or did.
 
+### Mailbox rows
+
+The rows above are per **topic**: two mailboxes on one topic count into the same `<topic> depth`,
+`<topic> dropped` and `<topic> batch`, and `pump drain` / `pump delivered` are per pump. A mailbox subscribed with a
+**name** — `Pump.subscribe(String mailbox, ...)`, one twin of each form, where a declared subscriber's name is its
+`class#method` — writes three more rows on the `bus` lane beside them, and those rows do not change:
+
+| kind | detail | when | thread |
+| --- | --- | --- | --- |
+| `enqueue` | `<mailbox> <depth>` | a message was queued; the depth after (a fold that supersedes a cell is an enqueue too) | the publisher's |
+| `deliver` | `<mailbox> <count>` | the pump handed the subscriber a batch of this many | the one that drains |
+| `drop` | `<mailbox> <policy>` | the mailbox refused or shed a message, one row per message; `<policy>` is the `Backpressure` name (`FAIL`, `DROP_NEWEST`, `DROP_OLDEST`, `COALESCE_LATEST`) | the publisher's |
+
+```
+seq,t_mono_ns,t_wall,thread,lane,kind,detail
+7,5102300,2026-10-19T03:12:39.101231Z,vexel-component-ui,bus,enqueue,dev.example.Worker#onJob 1
+9,5310800,2026-10-19T03:12:39.101440Z,vexel-component-worker,bus,deliver,dev.example.Worker#onJob 1
+```
+
+An unnamed mailbox writes none of them. A `FAIL` mailbox writes its `drop` before the `Fatal` policy runs, so it is
+the last row that mailbox writes. Each row costs what the `<topic> depth` row costs: the name is fixed at subscribe,
+the detail is composed only when tracing (`Probe.mark(lane, kind, subject, n)`), and nothing is done when the probe
+is off. In the rollup each kind is one counter whose count is the number of rows.
+
+These rows are a contract with the VexelRay Inspector, which draws the bus as a circuit from them
+(`vexelray-inspector/docs/bus-circuit.md` §3): change their shape there first.
+
 ### The resource ledger
 
 ```

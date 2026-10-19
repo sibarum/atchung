@@ -221,6 +221,24 @@ public final class Probe {
     }
 
     /**
+     * As {@link #mark(Lane, String, String)}, with the detail {@code "<subject> <n>"} — a mailbox and its depth,
+     * say.
+     *
+     * <p>The detail is composed only when tracing, which is the point of the overload: a call site on a path
+     * that runs per event passes a {@code subject} it built once, and a run that only rolls up pays for the
+     * counter and nothing else, as {@link #count(Lane, String, long)} does.
+     */
+    public static void mark(Lane lane, String name, String subject, long n) {
+        if (!ON || !lane.on) {
+            return;
+        }
+        counter(lane, name).bump(1L);
+        if (TRACE) {
+            emit(lane, name, subject + " " + n);
+        }
+    }
+
+    /**
      * Register {@code what} as an open resource of {@code kind}. Pair with {@link #closed}.
      *
      * <p>Call it where the resource is created, not where it is stored, and pass the object itself — the

@@ -60,6 +60,11 @@ supersedes whatever is queued for the same cell, while an event naming no cell i
 on its own. Any `Subscription` can `pause()`/`resume()` (lossy — events during a pause are dropped,
 not buffered).
 
+Each of `Pump.subscribe`'s forms has a twin taking a leading `String mailbox` — `ui.subscribe("app.Ui#onInput",
+INPUT, e -> ..., 256)` — which names the mailbox for the probe: a named mailbox also writes `enqueue`,
+`deliver` and `drop` rows, so a trace says which mailbox a message reached (see
+[`docs/probe.md`](docs/probe.md#mailbox-rows)). Delivery is the same either way.
+
 **Events vs. state.** Events answer *"what happened."* `State<T>` answers *"what is true now"* — one
 producer commits declared mutations, consumers read coherent immutable versions (lock-free), react
 per version, or block until a newer one exists, with bounded history. The version number and named

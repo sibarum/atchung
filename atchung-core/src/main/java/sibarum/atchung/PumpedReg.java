@@ -74,8 +74,17 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     private final String dropName;
     private final String batchName;
 
-    PumpedReg(Topic<T> topic, Subscriber<T> subscriber, int capacity, Backpressure backpressure, Fold<T> fold,
-              Runnable arrival) {
+    /**
+     * This mailbox's name, as the {@code enqueue} and {@code deliver} rows begin, and null when it has none or when
+     * not profiling — so the one null test on the hot path stands for both. The rows say which mailbox a message
+     * reached, which the topic rows above cannot: two mailboxes on one topic count into the same names.
+     */
+    private final String rowName;
+    /** The whole detail of this mailbox's {@code drop} row, {@code <mailbox> <policy>}; null exactly when {@link #rowName} is. */
+    private final String dropDetail;
+
+    PumpedReg(String mailbox, Topic<T> topic, Subscriber<T> subscriber, int capacity, Backpressure backpressure,
+              Fold<T> fold, Runnable arrival) {
         super(topic);
         this.arrival = arrival;
         if (capacity < 1) {
@@ -91,6 +100,8 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
         this.depthName = Probe.ON ? topic.name() + " depth" : null;
         this.dropName = Probe.ON ? topic.name() + " dropped" : null;
         this.batchName = Probe.ON ? topic.name() + " batch" : null;
+        this.rowName = Probe.ON ? mailbox : null;
+        this.dropDetail = rowName == null ? null : rowName + " " + backpressure.name();
     }
 
     @Override
@@ -109,6 +120,11 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                         // the default, so releasing the lock first would leave a publisher that is about to
                         // halt racing a drain that is about to succeed, and the report would name a mailbox
                         // that had just been emptied. The state described has to be the state observed.
+                        // Before the fault, which in the default does not return: the refusal is the last row
+                        // this mailbox writes, and a reader of the file sees which pin it happened at.
+                        if (rowName != null) {
+                            Probe.mark(Lane.BUS, "drop", dropDetail);
+                        }
                         MailboxOverflow overflow = new MailboxOverflow(topic(), capacity, delivered,
                                 subscribedMillis, lastDrainMillis);
                         Atchung.fatal().fault(overflow);
@@ -123,6 +139,9 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                         // A lossy policy is a decision, and this is the line that tells you it was taken. The
                         // policy is not the bug; a policy silently firing ten thousand times is.
                         Probe.count(Lane.BUS, dropName);
+                        if (rowName != null) {
+                            Probe.mark(Lane.BUS, "drop", dropDetail);
+                        }
                     }
                     enqueue(event, cell);
                     queued = true;
@@ -133,11 +152,18 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                         queued = true;
                     } else {
                         Probe.count(Lane.BUS, dropName);
+                        if (rowName != null) {
+                            Probe.mark(Lane.BUS, "drop", dropDetail);
+                        }
                     }
                 }
                 case COALESCE_LATEST -> {
                     if (Probe.ON && queued() > 0) {
                         Probe.count(Lane.BUS, dropName, queued());
+                        // One row per event the coalesce discards, as the counter above counts them.
+                        for (int i = queued(); rowName != null && i > 0; i--) {
+                            Probe.mark(Lane.BUS, "drop", dropDetail);
+                        }
                     }
                     clearQueue();
                     enqueue(event, cell);
@@ -163,6 +189,11 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
             // The peak of this counter is the number that matters: a mailbox whose depth averaged 2 and once
             // reached its capacity is a mailbox that was one publish away from dropping, or did.
             Probe.count(Lane.BUS, depthName, queued());
+            // Which mailbox the message reached, on the publisher's thread, which says who sent it. Inside the
+            // lock with the depth row, so the depth it carries is the depth this publish left.
+            if (queued && rowName != null) {
+                Probe.mark(Lane.BUS, "enqueue", rowName, queued());
+            }
         }
         // Outside the lock, deliberately: see the field. Nothing is signalled for an event that was dropped
         // rather than queued — a wake for a mailbox that is still empty is a thread woken to find out it had
@@ -233,6 +264,9 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
             lock.notifyAll(); // wake any BLOCK publisher waiting on space
         }
         Probe.count(Lane.BUS, batchName, batch.size());
+        if (rowName != null) {
+            Probe.mark(Lane.BUS, "deliver", rowName, batch.size());
+        }
         for (T event : batch) {
             subscriber.on(event);
         }

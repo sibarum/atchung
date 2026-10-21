@@ -6,6 +6,8 @@
 
 **Attention! Something happened — here, or across the wire.**
 
+Part of the [VexelRay](https://sibarum.github.io/) stack. Building an application on it? Start at the [developer guide](https://sibarum.github.io/vexelray-framework/developers/).
+
 Two complementary messaging layers for the JVM and GraalVM native-image, under one roof:
 
 - **Atchung!** (`atchung-core`) — a realtime, multithreaded **in-VM broadcast/subscribe event bus**.

@@ -51,8 +51,9 @@ says so) → `-Dlog.mode` → automation → test runner → native image → de
 1. `-Dlog.dir=…`, if set;
 2. `<app>.home/logs`, if the `<app>.home` property is set — the same redirect `AppHome` honours, so a test rig that
    moves an application's home moves its logs with it;
-3. in `DEV` and `AUTOMATION`, `./target/logs` when the working directory is a Maven project — beside the build, and
-   `mvn clean` removes it;
+3. in `DEV` and `AUTOMATION`, beside the build, so `mvn clean` removes it: `<build.dir>/logs` when the launcher passes
+   `-Dbuild.dir=${project.build.directory}` (every application's `exec:exec` does; on Linux that is `target-linux/`),
+   else `./target/logs` when the working directory is a Maven project;
 4. otherwise `$HOME/.<app>/logs/`, the per-user directory `AppHome` names.
 
 The file is `<app>.log`; the probe's trace, when the mode turns it on, is `<app>-probe.csv` beside it. One layout on

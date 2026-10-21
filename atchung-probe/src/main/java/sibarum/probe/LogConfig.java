@@ -58,8 +58,10 @@ import java.util.function.Predicate;
  *   <li>{@code log.dir}, if set;</li>
  *   <li>{@code <app>.home/logs}, if the {@code <app>.home} property is set — the same redirect {@code AppHome}
  *       honours, so a test rig that moves an application's home moves its logs with it;</li>
- *   <li>in {@link Mode#DEV} and {@link Mode#AUTOMATION}, {@code ./target/logs} when the working directory is a
- *       Maven project, so the log sits beside the build and {@code mvn clean} removes it;</li>
+ *   <li>in {@link Mode#DEV} and {@link Mode#AUTOMATION}, beside the build, so {@code mvn clean} removes it:
+ *       {@code <build.dir>/logs} when the launcher says where the build is (an application's {@code exec:exec}
+ *       passes {@code -Dbuild.dir=${project.build.directory}}, which is {@code target-linux/} on Linux), else
+ *       {@code ./target/logs} when the working directory is a Maven project;</li>
  *   <li>otherwise {@code $HOME/.<app>/logs}, the per-user directory {@code AppHome} names.</li>
  * </ol>
  *
@@ -294,8 +296,14 @@ public record LogConfig(String app, Mode mode, Level console, Level file, Map<St
         if (home != null) {
             return Path.of(home).toAbsolutePath().normalize().resolve("logs");
         }
-        if ((mode == Mode.DEV || mode == Mode.AUTOMATION) && env.isFile().test(env.cwd().resolve("pom.xml"))) {
-            return env.cwd().resolve("target").resolve("logs");
+        if (mode == Mode.DEV || mode == Mode.AUTOMATION) {
+            String build = get.apply("build.dir");
+            if (build != null) {
+                return Path.of(build).toAbsolutePath().normalize().resolve("logs");
+            }
+            if (env.isFile().test(env.cwd().resolve("pom.xml"))) {
+                return env.cwd().resolve("target").resolve("logs");
+            }
         }
         return env.home().resolve("." + app).resolve("logs");
     }

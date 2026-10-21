@@ -127,6 +127,19 @@ class LogConfigTest {
     }
 
     @Test
+    void theFileGoesInTheBuildTheLauncherNames() {
+        Path build = Path.of("/work/editor/target-linux").toAbsolutePath();
+        assertEquals(build.resolve("logs"), resolve(Map.of("build.dir", build.toString()), false, false, true).dir(),
+                "the build directory exec:exec passes, which is not target/ everywhere");
+        Path home = Path.of("/rig/home").toAbsolutePath();
+        assertEquals(home.resolve("logs"), resolve(Map.of("build.dir", build.toString(), "editor.home",
+                home.toString()), false, false, true).dir(), "a moved home still takes its logs with it");
+        assertEquals(HOME.resolve(".editor").resolve("logs"),
+                resolve(Map.of("build.dir", build.toString()), true, false, true).dir(),
+                "a packaged app never logs into a checkout");
+    }
+
+    @Test
     void theFileGoesToTheUsersDotDirectoryOutsideAProjectAndWhenPackaged() {
         Path expected = HOME.resolve(".editor").resolve("logs");
         assertEquals(expected, resolve(Map.of(), false, false, false).dir());

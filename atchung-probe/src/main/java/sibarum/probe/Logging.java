@@ -1,7 +1,12 @@
 package sibarum.probe;
 
+import java.io.IOException;
+import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -61,6 +66,9 @@ public final class Logging {
     /** How many distinct {@link Log#warnOnce} keys are remembered; see {@code Diagnostics.KEY_LIMIT}. */
     static final int ONCE_LIMIT = 256;
 
+    /** The most of an ended process's standard error read back: the end of it, where a crash report is. */
+    static final int RECOVER_LIMIT = 256 * 1024;
+
     /** Bumped whenever levels change, so a {@link Log} knows to recompute its threshold. */
     static final AtomicInteger VERSION = new AtomicInteger();
 
@@ -77,6 +85,8 @@ public final class Logging {
 
     private static volatile State state;
     private static volatile Thread flusher;
+    private static volatile StandardErrorLog stderr;
+    private static volatile Path nativeStderr;
 
     private Logging() {
     }
@@ -318,7 +328,7 @@ public final class Logging {
                 capture.entries.add(entry);
             }
         }
-        if (toConsole) {
+        if (toConsole && stderr == null) {
             String line = format(c.format(), CONSOLE_TIME, now, level, thread, logger, message, thrown);
             synchronized (CONSOLE_LOCK) {
                 System.err.print(line);
@@ -342,6 +352,76 @@ public final class Logging {
         State s = state;
         if (s != null && s.file() != null) {
             s.file().flush();
+        }
+    }
+
+    // --- standard error ------------------------------------------------------------------------------------
+
+    /**
+     * Send what is written to {@code System.err} into the log, for a process whose standard error goes nowhere: a
+     * Windows GUI-subsystem program, which is what an installed application is. Without it, what is only ever
+     * printed there is lost: the stack {@code Fatal.HALT} prints on the way out, a library's
+     * {@code printStackTrace}. The text arrives as records of the logger {@code stderr}; see {@link StandardErrorLog}.
+     *
+     * <p>The console sink stops, since it writes to {@code System.err} and there is no console to reach. Called once,
+     * by whoever started the process, after {@link #configure}; a second call does nothing.
+     *
+     * @param nativeFile the file the process's native standard error now points at, which is where a native
+     *                   image's runtime writes its crash report, since that cannot go through Java. Deleted at a
+     *                   clean exit if nothing reached it, and otherwise read into the log by the next start's
+     *                   {@link #recoverStandardError}. {@code null} if there is none.
+     */
+    public static void captureStandardError(Path nativeFile) {
+        synchronized (LOCK) {
+            if (stderr != null) {
+                return;
+            }
+            StandardErrorLog log = new StandardErrorLog();
+            stderr = log;
+            nativeStderr = nativeFile;
+            System.setErr(new PrintStream(log, false, StandardCharsets.UTF_8));
+            startFlusher();
+            hookShutdown();
+        }
+    }
+
+    /**
+     * Read into the log, as one {@code ERROR} record each, what ended processes of this application left in their
+     * native standard error files ({@link LogConfig#stderrFile}), and delete those files. The crash report of a
+     * native image is written there as the process dies, so the next start is the first moment anything can log it.
+     * A file whose process is still running is left alone.
+     */
+    public static void recoverStandardError() {
+        LogConfig c = config();
+        Path dir = c.dir();
+        if (dir == null || !Files.isDirectory(dir)) {
+            return;
+        }
+        String prefix = c.app() + "-stderr-";
+        Log log = Log.of("stderr");
+        try (DirectoryStream<Path> files = Files.newDirectoryStream(dir, prefix + "*.log")) {
+            for (Path file : files) {
+                String name = file.getFileName().toString();
+                long pid;
+                try {
+                    pid = Long.parseLong(name.substring(prefix.length(), name.length() - ".log".length()));
+                } catch (NumberFormatException e) {
+                    continue;
+                }
+                if (ProcessHandle.of(pid).isPresent()) {
+                    continue;
+                }
+                byte[] bytes = Files.readAllBytes(file);
+                int from = Math.max(0, bytes.length - RECOVER_LIMIT);
+                String text = new String(bytes, from, bytes.length - from, StandardCharsets.UTF_8).stripTrailing();
+                if (!text.isEmpty()) {
+                    log.error("process " + pid + " ended with this on its standard error"
+                            + (from > 0 ? " (its last " + RECOVER_LIMIT / 1024 + " KB)" : "") + ":\n" + text);
+                }
+                Files.deleteIfExists(file);
+            }
+        } catch (IOException | RuntimeException e) {
+            Log.of("log").warn("earlier standard error in {} not read back: {}", dir, e.toString());
         }
     }
 
@@ -407,9 +487,24 @@ public final class Logging {
     private static void hookShutdown() {
         if (HOOKED.compareAndSet(false, true)) {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                StandardErrorLog err = stderr;
+                if (err != null) {
+                    err.drain(true);
+                }
                 State s = state;
                 if (s != null && s.file() != null) {
                     s.file().close();
+                }
+                Path file = nativeStderr;
+                if (file != null) {
+                    try {
+                        // Open still, but shared for deletion, so it goes when the process does.
+                        if (Files.size(file) == 0) {
+                            Files.delete(file);
+                        }
+                    } catch (IOException e) {
+                        // left for the next start's recoverStandardError, which deletes it
+                    }
                 }
             }, "vexelray-log-close"));
         }
@@ -426,6 +521,10 @@ public final class Logging {
                     Thread.sleep(1000L);
                 } catch (InterruptedException e) {
                     return;
+                }
+                StandardErrorLog err = stderr;
+                if (err != null) {
+                    err.drain(false);
                 }
                 State s = state;
                 if (s != null && s.file() != null) {
@@ -446,6 +545,8 @@ public final class Logging {
                 s.file().close();
             }
             state = null;
+            stderr = null;   // System.err is the test's to put back
+            nativeStderr = null;
             ONCE.clear();
             VERSION.incrementAndGet();
         }

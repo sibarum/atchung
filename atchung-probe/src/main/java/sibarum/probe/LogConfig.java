@@ -228,6 +228,15 @@ public record LogConfig(String app, Mode mode, Level console, Level file, Map<St
     }
 
     /**
+     * Where process {@code pid}'s native standard error goes when it had none of its own, or {@code null} when the
+     * file is off. One per process, because two running at once must not read back or delete each other's; see
+     * {@link Logging#recoverStandardError()}.
+     */
+    public Path stderrFile(long pid) {
+        return dir == null ? null : dir.resolve(app + "-stderr-" + pid + ".log");
+    }
+
+    /**
      * The level a logger is held to by name: the longest override that is {@code name} or a dotted prefix of it,
      * or {@code null} if nothing names it.
      */

@@ -284,6 +284,15 @@ public final class Probe {
         return ON && lane.on;
     }
 
+    /**
+     * Whether {@code lane} is selected <em>and</em> its rows are being written — for a caller whose detail costs
+     * something to build, on a path that runs per event. {@link #on} alone is not enough there: a run that only rolls
+     * up counts every {@link #mark} and prints none of their details, so a detail built for it is thrown away.
+     */
+    public static boolean tracing(Lane lane) {
+        return ON && TRACE && lane.on;
+    }
+
     // --- live sinks --------------------------------------------------------
 
     /**

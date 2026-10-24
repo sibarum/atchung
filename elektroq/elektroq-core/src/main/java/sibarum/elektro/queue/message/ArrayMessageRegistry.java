@@ -73,6 +73,10 @@ public final class ArrayMessageRegistry implements MessageRegistry {
     @Override
     public <T> void register(MessageType<T> type) {
         Objects.requireNonNull(type, "type");
+        if (type.id() == Protocol.HELLO_TYPE) {
+            throw new IllegalArgumentException("Message id " + Protocol.HELLO_TYPE + " is the conduit's hello, "
+                    + "and cannot be given to " + type.name());
+        }
         if (size >= resizeThreshold) {
             resize();
         }

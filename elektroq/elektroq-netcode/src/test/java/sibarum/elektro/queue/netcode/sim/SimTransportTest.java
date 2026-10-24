@@ -78,10 +78,13 @@ class SimTransportTest {
     @Test
     void totalLossDropsEverything() throws Exception {
         CountDownLatch received = connect(SimParams.lossy(1.0, 42L));
+        // Counted from here: the conduit's hello at connect is a frame too, and was dropped like any other.
+        long offered = clientSim.stats().offered();
+        long dropped = clientSim.stats().dropped();
         client.action(MSG).emit(new Msg("gone"));
         assertFalse(received.await(500, TimeUnit.MILLISECONDS), "100% loss should drop the message");
-        assertEquals(1, clientSim.stats().offered());
-        assertEquals(1, clientSim.stats().dropped());
+        assertEquals(offered + 1, clientSim.stats().offered());
+        assertEquals(dropped + 1, clientSim.stats().dropped());
     }
 
     @Test

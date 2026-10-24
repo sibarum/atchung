@@ -19,6 +19,7 @@
         <!-- intrabuf: the envelope's header roles, and intrabuf-backed message types. Installed to the
              local .m2 by `mvn install` in the sibling intrabuf repo. -->
         <intrabuf.version>0.1.2-SNAPSHOT</intrabuf.version>
+        <atchung.version>1.2-SNAPSHOT</atchung.version>
     </properties>
 
     <modules>

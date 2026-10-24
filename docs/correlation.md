@@ -1,6 +1,6 @@
 # Correlation: every message knows what caused it
 
-Status: **proposed 2026-10-24; steps 1 and 2 done 2026-10-24.** Written for `vexelray-gui/docs/plans/export.md` (its M2), which needs to say, for
+Status: **proposed 2026-10-24; steps 1 to 3 done 2026-10-24.** Written for `vexelray-gui/docs/plans/export.md` (its M2), which needs to say, for
 every GUI write in a capture, what set it off. Lands here because the bus, the log and the probe are all here.
 
 ## Why
@@ -75,11 +75,23 @@ cause except around a body.
 
 The event object is untouched: the bus stays zero-copy.
 
-**Across processes: elektro-Q's `Envelope`** gains an optional `cause` field (a minor version: an old peer ignores
-it, a new one reading an old peer's frame finds none). `DefaultConduit` writes `Cause.current()` going out and
-binds the envelope's cause around delivery coming in, so the remote ID keeps its own prefix and a chain that
+**Across processes: elektro-Q's `Envelope`** gains a `cause` field. `DefaultConduit` writes `Cause.current()` going
+out and binds the envelope's cause around delivery coming in, so the remote ID keeps its own prefix and a chain that
 crosses into the Inspector or an agent stays one chain. `ElektroBridge` needs nothing of its own: it publishes and
 emits from inside the cause already.
+
+The first draft said an old peer would ignore the field. It cannot: a header is read field by field with no length
+and no way to skip one it does not know, and the payload is the rest of the frame, so an old peer would read the
+cause as the start of the payload. (Nor can it trail the payload: intrabuf refuses trailing bytes, and an `@Message`
+codec reads them as optional fields.) So the cause is **negotiated**, within protocol version 2:
+
+- Every frame sets a bit saying its sender reads causes. The bitset was six bits in one byte, so it stays one
+  byte, and an old peer ignores bits it does not know.
+- The cause itself (a presence bit and 8 fixed bytes) goes only to a peer that has set that bit, and in a broadcast
+  only when every peer has. A frame with no cause is the version 2 header byte for byte, but for the bit.
+- Each conduit sends a **hello** as a peer connects: type `-1`, no payload. An old peer finds no type under it and
+  drops it, as it drops any unknown type; a new one learns at once, so a peer that never sends anything still gets
+  causes. Until the hello arrives, frames go without.
 
 **Where causes begin** is the boundary code, not this repo: the input backends in `vexelray-os`, the frame clock
 and timers, the automation server (each command its own `c` cause, so an agent's command and everything it did

@@ -19,6 +19,7 @@ import sibarum.intrabuf.HeaderCodec;
 import sibarum.intrabuf.IbReader;
 import sibarum.intrabuf.IbWriter;
 import sibarum.intrabuf.IntrabufException;
+import sibarum.probe.Cause;
 
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -47,6 +48,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * the payload, and either completes a pending {@code request} (on a {@code REPLY}) or
  * dispatches to the {@link Actor}s subscribed to that type.
  *
+ * <p><b>Causes cross with the frames.</b> A frame is sent with the {@link Cause} its sender was in, and its actors run
+ * inside that cause, as does whatever completes a request's future, so a chain that crosses processes stays one
+ * chain. Only to a peer that has said it reads causes, by its hello at connect or by any frame of its own; anything
+ * else may be a peer from before them (see {@link Envelope}). A frame that brings no cause leaves the receiving
+ * thread in the one it was in.
+ *
  * <p>Actors are invoked on the transport's receive thread, which for the bundled TCP
  * transport is a per-connection virtual thread; this preserves per-peer ordering.
  * Actors must therefore not block indefinitely.
@@ -59,6 +66,8 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
 
     private final AtomicReference<ConduitState> state = new AtomicReference<>(ConduitState.NEW);
     private final Set<PeerId> peers = ConcurrentHashMap.newKeySet();
+    /** The peers that have said they read causes: only these are sent one. */
+    private final Set<PeerId> causePeers = ConcurrentHashMap.newKeySet();
     private final Map<Integer, List<Actor<?>>> actors = new ConcurrentHashMap<>();
     private final Map<Long, Pending> pending = new ConcurrentHashMap<>();
     private final AtomicLong correlation = new AtomicLong(1);
@@ -209,6 +218,27 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
         if ((header.protocolVersion() & 0xFF) != Protocol.VERSION) {
             throw new ElektroException("Unsupported protocol version: " + (header.protocolVersion() & 0xFF));
         }
+        if (header.causes() && !causePeers.contains(source)) {
+            causePeers.add(source);
+        }
+        if (header.typeId() == Protocol.HELLO_TYPE) {
+            return;
+        }
+        if (header.cause() == null) {
+            receive(source, header, envelopeFrame, reader, bytes, offset);
+            return;
+        }
+        long previous = Cause.enter(header.cause());
+        try {
+            receive(source, header, envelopeFrame, reader, bytes, offset);
+        } finally {
+            Cause.exit(previous);
+        }
+    }
+
+    /** Decodes and delivers a frame whose envelope has been read and checked, inside whatever cause it brought. */
+    private void receive(PeerId source, Envelope header, HeaderCodec.Frame<Envelope> envelopeFrame, IbReader reader,
+                         byte[] bytes, int offset) {
         MessageType<?> type = registry.byId(header.typeId());
         if (type == null) {
             return; // unknown type id: drop rather than guess
@@ -238,12 +268,29 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
     @Override
     public void onConnected(PeerId peer) {
         peers.add(peer);
+        hello(peer);
         announce(peer, true);
+    }
+
+    /**
+     * Tell a new peer this conduit reads causes, so it can send them before it has had anything else from here. A
+     * failure is reported and absorbed: the peer is still connected, and learns the same from the next frame.
+     */
+    private void hello(PeerId peer) {
+        try {
+            IbWriter frame = new IbWriter(16);
+            EnvelopeIntrabuf.CODEC.write(frame, Envelope.hello());
+            transport.send(peer, ByteBuffer.wrap(frame.array(), 0, frame.position()));
+        } catch (RuntimeException e) {
+            System.err.println("[elektroq] conduit '" + name + "': the hello to peer " + peer.handle()
+                    + " was not sent: " + e);
+        }
     }
 
     @Override
     public void onDisconnected(PeerId peer) {
         peers.remove(peer);
+        causePeers.remove(peer);
         ElektroException cause =
                 new ElektroException("Peer " + peer.handle() + " disconnected before replying");
         pending.forEach((id, waiter) -> {
@@ -277,8 +324,12 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
 
     <T> void sendFrame(PeerId destination, MessageType<T> type, T message, byte flags, long correlationId) {
         IbWriter frame = new IbWriter(64);
+        long cause = Cause.current();
+        if (cause != Cause.NONE && !readsCauses(destination)) {
+            cause = Cause.NONE;
+        }
         try {
-            EnvelopeIntrabuf.CODEC.write(frame, Envelope.of(type.schema(), flags, correlationId));
+            EnvelopeIntrabuf.CODEC.write(frame, Envelope.of(type.schema(), flags, correlationId, cause));
             if (type.codec() instanceof IntrabufCodec<T> intrabuf) {
                 intrabuf.messageCodec().encodeBody(message, frame);
             } else {
@@ -290,6 +341,14 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
             throw new ElektroException(type.name() + ": " + e.getMessage(), e);
         }
         transport.send(destination, ByteBuffer.wrap(frame.array(), 0, frame.position()));
+    }
+
+    /** Whether {@code destination} may be sent a cause: it has said it reads them, or for a broadcast, every peer has. */
+    private boolean readsCauses(PeerId destination) {
+        if (destination == null || destination.isBroadcast()) {
+            return !peers.isEmpty() && causePeers.containsAll(peers);
+        }
+        return causePeers.contains(destination);
     }
 
     <T, R> CompletionStage<R> request(MessageType<T> type, T message, PeerId destination, MessageType<R> replyType) {

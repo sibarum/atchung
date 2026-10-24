@@ -9,7 +9,8 @@ package sibarum.elektro.queue.message;
  *
  * <pre>
  *   size    field
- *   1       bitset           snapshot, fingerprint present, request, reply, fragment, compressed
+ *   1       bitset           snapshot, fingerprint present, request, reply, fragment, compressed,
+ *                            reads causes, cause present
  *   1-3     magic            (0xEC51)
  *   1       protocolVersion
  *   1       wireVersion      intrabuf's body format
@@ -19,7 +20,11 @@ package sibarum.elektro.queue.message;
  *   1       compat           STRICT, BACKWARD or FULL
  *   0 or 4  fingerprint      when the message's schema calls for one
  *   1-10    correlationId
+ *   0 or 8  cause            only to a peer that reads causes
  * </pre>
+ *
+ * The last two bits and the cause came later, within version 2: a peer from before them ignores bits it does not
+ * know, and is never sent the cause, whose bytes it could not skip. See {@link Envelope}.
  *
  * A one-way emit of a small-id message is 10 bytes; version 1's fixed header was 24. Transports already delimit
  * frames (TCP and UDS with a length prefix, UDP by datagram and reassembly), so the envelope carries no payload
@@ -35,6 +40,12 @@ public final class Protocol {
      * version 1 was a fixed 24-byte big-endian header.
      */
     public static final int VERSION = 2;
+
+    /**
+     * The type id of a conduit's {@linkplain Envelope#hello() hello}, which no registry may give a type: an older
+     * peer finds nothing under it and drops the frame.
+     */
+    public static final int HELLO_TYPE = -1;
 
     private Protocol() {
     }

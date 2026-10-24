@@ -16,6 +16,7 @@ import sibarum.intrabuf.annotation.IntrabufMessage;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EnvelopeTest {
@@ -80,6 +81,89 @@ class EnvelopeTest {
         WireBufferWriter w = new WireBufferWriter();
         reading.codec().encode(new Reading("t1", 21.5), w);
         assertEquals(new Reading("t1", 21.5), reading.codec().decode(new WireBufferReader(w.toByteArray())));
+    }
+
+    @Test
+    void aCauseIsEightBytesWhenThereIsOneAndNothingWhenThereIsNot() {
+        long cause = 0x3f2a1_4_07_0000_04f2L;   // any nonzero long: the envelope does not interpret it
+        Envelope with = Envelope.of(NOTE.schema(), Flags.NONE, 0, cause);
+        Envelope without = Envelope.of(NOTE.schema(), Flags.NONE, 0);
+
+        assertEquals(cause, EnvelopeIntrabuf.CODEC.readFrame(new IbReader(write(with))).header().causeId());
+        assertNull(without.cause());
+        assertEquals(0L, without.causeId());
+        assertTrue(without.causes(), "every frame says its sender reads causes, whether or not it brings one");
+        assertEquals(10, write(without).length, "saying so is a bit, not a byte");
+        assertEquals(18, write(with).length);
+    }
+
+    /**
+     * Version 2 as it was before causes, written out by hand from the generated codec of that time, so the tests
+     * below are against a peer that predates the field and not against this build's idea of one.
+     */
+    static final class Before {
+        static byte[] write(int typeId, byte flags, long correlationId) {
+            SchemaInfo s = NOTE.schema();
+            IbWriter w = new IbWriter();
+            long bits = (flags & Flags.REQUEST) != 0 ? 0x4 : 0;
+            bits |= (flags & Flags.REPLY) != 0 ? 0x8 : 0;
+            w.writeBits(bits, 1);
+            w.writeInt16(Protocol.MAGIC);
+            w.writeInt8((byte) Protocol.VERSION);
+            w.writeInt8((byte) sibarum.intrabuf.Header.of(s).wireVersion());
+            w.writeInt32(typeId);
+            w.writeInt16((short) s.major());
+            w.writeInt16((short) s.minor());
+            w.writeEnum(s.compat());
+            w.writeInt64(correlationId);
+            return w.toByteArray();
+        }
+
+        /** Reads the header as that codec did, leaving {@code r} where it believed the payload began. */
+        static int readTypeId(IbReader r) {
+            int at = r.beginBits(1);
+            long bits = r.bitsWord(at, 1, 0);
+            r.readInt16();
+            r.readInt8();
+            r.readInt8();
+            int typeId = r.readInt32();
+            r.readInt16();
+            r.readInt16();
+            r.readEnum(Compat.values().length, "Compat");
+            if ((bits & 0x2) != 0) {
+                r.readFixed32();
+            }
+            r.readInt64();
+            return typeId;
+        }
+    }
+
+    @Test
+    void aPeerFromBeforeCausesReadsAFrameWithoutOneExactly() {
+        byte[] header = write(Envelope.of(NOTE.schema(), Flags.REQUEST, 42));
+        IbReader r = new IbReader(header);
+        assertEquals(1, Before.readTypeId(r));
+        assertEquals(header.length, r.position(), "the payload begins where it always did: the new bit is ignored");
+    }
+
+    @Test
+    void aFrameFromBeforeCausesIsReadAsOneWithNone() {
+        Envelope e = EnvelopeIntrabuf.CODEC.read(new IbReader(Before.write(1, Flags.REQUEST, 42)));
+        assertEquals(42, e.correlationId());
+        assertTrue(e.request());
+        assertFalse(e.causes(), "its sender is not one to send a cause to");
+        assertNull(e.cause());
+    }
+
+    @Test
+    void theHelloIsATypeNoRegistryHas() {
+        Envelope hello = Envelope.hello();
+        assertEquals(Protocol.HELLO_TYPE, hello.typeId());
+        assertTrue(hello.causes());
+        assertEquals(Protocol.HELLO_TYPE, Before.readTypeId(new IbReader(write(hello))));
+        assertNull(new ArrayMessageRegistry().byId(Protocol.HELLO_TYPE), "so a peer from before drops it");
+        MessageType<Note> squatter = new MessageType<>(Protocol.HELLO_TYPE, 1, "Squatter", Note.class, NOTE.codec());
+        assertThrows(IllegalArgumentException.class, () -> new ArrayMessageRegistry().register(squatter));
     }
 
     @Test

@@ -28,6 +28,13 @@
             <artifactId>intrabuf-runtime</artifactId>
             <version>${intrabuf.version}</version>
         </dependency>
+        <!-- Cause: a frame carries the cause it was sent in, and is delivered inside it (atchung's
+             docs/correlation.md). atchung-probe is JDK-only. -->
+        <dependency>
+            <groupId>sibarum.atchung</groupId>
+            <artifactId>atchung-probe</artifactId>
+            <version>${atchung.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

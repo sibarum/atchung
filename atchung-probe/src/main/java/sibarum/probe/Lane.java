@@ -46,7 +46,13 @@ public enum Lane {
     SHADER("shader"),
 
     /** The application's own spans. Nothing in the framework publishes here; it is yours. */
-    APP("app");
+    APP("app"),
+
+    /**
+     * Trace sites: a row each time a method annotated with vexelray's {@code @Trace} runs, naming the site and
+     * its arguments, in whatever cause it ran in (vexelray's {@code docs/trace.md}).
+     */
+    TRACE("trace");
 
     private final String key;
 

@@ -94,6 +94,32 @@ class CauseTest {
     }
 
     @Test
+    void aCarriedTaskRunsInItsSubmittersCauseOnAnotherThread() throws Exception {
+        long cause = Cause.source("cause-test.carry", Cause.Kind.INPUT).next();
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Executor lane = Cause.carrying(pool);
+            long[] seen = {-1, -1};
+            java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(2);
+            Cause.within(cause, () -> lane.execute(() -> {
+                seen[0] = Cause.current();
+                done.countDown();
+            }));
+            lane.execute(() -> {                     // submitted in no cause
+                seen[1] = Cause.current();
+                done.countDown();
+            });
+            assertTrue(done.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(cause, seen[0]);
+            assertEquals(Cause.NONE, seen[1], "the first task's cause did not stay on the pool's thread");
+        } finally {
+            pool.shutdownNow();
+        }
+        Runnable plain = () -> { };
+        assertSame(plain, Cause.carry(plain), "outside any cause there is nothing to carry, and nothing allocated");
+    }
+
+    @Test
     void enterAndExitArePaired() {
         long cause = Cause.source("cause-test.enter", Cause.Kind.MAILBOX).next();
         long previous = Cause.enter(cause);

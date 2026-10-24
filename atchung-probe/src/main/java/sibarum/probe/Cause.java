@@ -217,6 +217,21 @@ public final class Cause {
         CURRENT.get()[0] = previous;
     }
 
+    /**
+     * {@code task}, to run later on another thread inside the cause this thread is in now: what an executor hop does
+     * so the work it hands on stays the submitter's. In no cause, {@code task} itself, so a hop made outside any cause
+     * costs nothing; the thread that runs it is then in whatever cause it was in, which for a pool's thread is none.
+     */
+    public static Runnable carry(Runnable task) {
+        long cause = current();
+        return cause == NONE ? task : () -> within(cause, task);
+    }
+
+    /** {@code lane}, carrying each task's submitter's cause to the thread that runs it ({@link #carry}). */
+    public static java.util.concurrent.Executor carrying(java.util.concurrent.Executor lane) {
+        return task -> lane.execute(carry(task));
+    }
+
     /** This process's prefix, the high 20 bits of every cause it begins. */
     public static int process() {
         return PROCESS;

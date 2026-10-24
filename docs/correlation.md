@@ -1,6 +1,6 @@
 # Correlation: every message knows what caused it
 
-Status: **proposed 2026-10-24; steps 1 to 3 done 2026-10-24.** Written for `vexelray-gui/docs/plans/export.md` (its M2), which needs to say, for
+Status: **proposed 2026-10-24; steps 1 to 4 done 2026-10-24.** Written for `vexelray-gui/docs/plans/export.md` (its M2), which needs to say, for
 every GUI write in a capture, what set it off. Lands here because the bus, the log and the probe are all here.
 
 ## Why
@@ -137,4 +137,12 @@ Its rows go through `Probe` and so carry the cause like any other.
 3. **elektro-Q's envelope carries it.** Verified over the local transport, both ways, and against a peer that
    predates the field.
 4. **The boundaries** (other repos): input, clock and timers, automation commands, the offload pool, each
-   registered as a source.
+   registered as a source. Done 2026-10-24, with `Cause.carry` / `Cause.carrying` here for the hops:
+   - tactroller's `InputPublisher`: a cause per event, from `input.key`, `input.button`, `input.pointer`,
+     `input.scroll`, `input.text`, `input.touch`; a focus change is one `input.focus` cause.
+   - `vexelray-gui`: `GuiApp`'s loop, a `gui.frame` cause per pass; `post` and `Gui`'s handler and offload lanes
+     carry the submitter's; `KronoGui.after` / `every` begin `krono.after` / `krono.<name>`, and `onTimeline`
+     carries; the tooltip's delay is `tooltip.delay`; the automation server's commands are `automation.command`.
+     Verified end to end by `CauseChainTest`: a command's click, its handler and the write it made share one ID.
+   - Not yet: the video decoder's threads (`Reel`, `Footage`, in `vexelray-codec`), the terminal's PTY pumps,
+     and any other thread an application starts itself. File watching has no watcher to wrap yet.

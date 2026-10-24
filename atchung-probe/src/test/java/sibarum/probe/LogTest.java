@@ -198,6 +198,45 @@ class LogTest {
         assertTrue(lines.stream().allMatch(l -> l.startsWith("{") && l.endsWith("}")), lines.toString());
     }
 
+    /**
+     * Every record carries the cause it was made in, with nobody passing it: the capture has it as a field, the file
+     * writes it beside the thread, and a record made in no cause looks the way records always have.
+     */
+    @Test
+    void aRecordCarriesTheCauseItWasMadeIn(@TempDir Path dir) throws IOException {
+        Logging.configure(config(Mode.AUTOMATION, Level.INFO, Level.INFO, Map.of(), dir, LogConfig.Format.TEXT));
+        long cause = Cause.source("log-test.save", Cause.Kind.COMMAND).next();
+        String out;
+        try (Logging.Capture capture = Logging.capture()) {
+            out = console(() -> {
+                Cause.within(cause, () -> Log.of("app.save").info("wrote {} bytes", 42));
+                Log.of("app.save").info("flushed");
+            });
+            List<Logging.Entry> records = capture.records();
+            assertEquals(cause, records.get(0).cause());
+            assertEquals(Cause.NONE, records.get(1).cause(), "the cause ended with the work it was entered for");
+        }
+
+        List<String> lines = Files.readAllLines(dir.resolve("t.log"));
+        String caused = lines.get(lines.size() - 2);
+        assertTrue(caused.endsWith("[" + Thread.currentThread().getName() + "] (" + Cause.format(cause)
+                + ") app.save - wrote 42 bytes"), caused);
+        assertTrue(lines.get(lines.size() - 1).matches(".*\\] app.save - flushed"), lines.get(lines.size() - 1));
+        // The console is for reading as it scrolls; the ID is for joining the file against a trace.
+        assertFalse(out.contains(Cause.format(cause)), out);
+    }
+
+    @Test
+    void jsonCarriesTheCauseAsAField(@TempDir Path dir) throws IOException {
+        Logging.configure(config(Mode.AUTOMATION, Level.OFF, Level.INFO, Map.of(), dir, LogConfig.Format.JSON));
+        long cause = Cause.source("log-test.json", Cause.Kind.TIMER).next();
+        Cause.within(cause, () -> Log.of("j").info("tick"));
+        Log.of("j").info("idle");
+        List<String> lines = Files.readAllLines(dir.resolve("t.log")).subList(1, 3);
+        assertTrue(lines.get(0).contains("\"cause\":\"" + Cause.format(cause) + "\""), lines.get(0));
+        assertFalse(lines.get(1).contains("\"cause\""), "no cause, no field: " + lines.get(1));
+    }
+
     @Test
     void theBannerSaysWhatWasDecidedAndWhatWasIgnored(@TempDir Path dir) throws IOException {
         LogConfig c = new LogConfig("banner", Mode.AUTOMATION, Level.OFF, Level.INFO, Map.of(), dir,
@@ -208,6 +247,8 @@ class LogTest {
         });
         String file = Files.readString(dir.resolve("banner.log"));
         assertTrue(file.contains("starting banner: mode=AUTOMATION"), file);
+        // The prefix every cause of this run starts with, so a cause on any line names the run it came from.
+        assertTrue(file.contains(String.format("process=%05x", Cause.process())), file);
         assertTrue(file.contains("log setting ignored: log.level=loud is not a level"), file);
         assertNotNull(out);
     }

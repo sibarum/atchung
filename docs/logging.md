@@ -67,6 +67,16 @@ launched and closed without logging anything leaves no directory behind.
 files. A file that cannot be written — read-only directory, full disk — is reported once on stderr and given up on;
 the records still reach the console. A log must not be able to stop the application it describes.
 
+**Each line carries its cause.** A record made inside a cause (see [`correlation.md`](correlation.md)) has it in
+parentheses between the thread and the logger, and in JSON as a `cause` field; a record made in no cause has
+neither, and reads as it always has. The console leaves it out, since a person reading as it scrolls has no use for
+the ID, which is for joining the file against the probe's trace.
+
+```
+2026-10-24T13:40:26.997Z INFO  [main] (3f2a1.c07.4f2) app.save - wrote 42 bytes
+2026-10-24T13:40:27.001Z INFO  [vexelray-log-flush] app.save - flushed
+```
+
 ## Settings
 
 Each is a system property, or the same name in upper case with dots as underscores as an environment variable
@@ -160,7 +170,8 @@ framework's dependency edges already fall.
 `Logging.configure(app, mode)` — which the framework's `VexelApplication.run` calls before anything else, so no
 application does — also installs:
 
-- a **startup banner** at `INFO`: application, mode, sink levels, file, format, pid, JVM, OS;
+- a **startup banner** at `INFO`: application, mode, sink levels, file, format, pid, the process's cause prefix
+  (`process=3f2a1`), JVM, OS;
 - an **uncaught-exception handler**, if nobody installed one, that logs the exception at `ERROR` with its stack;
 - a **shutdown hook** that flushes and closes the file.
 
@@ -178,7 +189,7 @@ try (Logging.Capture log = Logging.capture()) {
 
 `capture()` records every record that passes a logger's level, into memory, whatever the sinks do with it — for the
 reason `Diagnostics.recorded()` exists: a warning nobody has watched fire is one more instrument taken on faith, and
-a test has to be able to watch without the suite being noisy. To capture `DEBUG`, raise the logger first
+a test has to be able to watch without the suite being noisy. Each `Entry` has the `cause` it was made in. To capture `DEBUG`, raise the logger first
 (`Logging.setLevel("x", Level.DEBUG)`).
 
 ## Adopting it in a repo

@@ -1,6 +1,6 @@
 # Correlation: every message knows what caused it
 
-Status: **proposed 2026-10-24; step 1 done 2026-10-24.** Written for `vexelray-gui/docs/plans/export.md` (its M2), which needs to say, for
+Status: **proposed 2026-10-24; steps 1 and 2 done 2026-10-24.** Written for `vexelray-gui/docs/plans/export.md` (its M2), which needs to say, for
 every GUI write in a capture, what set it off. Lands here because the bus, the log and the probe are all here.
 
 ## Why

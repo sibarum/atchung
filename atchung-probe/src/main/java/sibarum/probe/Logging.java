@@ -184,9 +184,11 @@ public final class Logging {
 
     private static void banner(LogConfig c) {
         Log log = Log.of("log");
-        log.info("starting {}: mode={} console={} file={} format={} pid={} java={} os={}", c.app(), c.mode(),
-                c.console(), c.fileEnabled() ? c.file() + " -> " + c.logFile() : "off",
+        // process= is the prefix of every cause this process begins, so a cause on any line resolves to this run.
+        log.info("starting {}: mode={} console={} file={} format={} pid={} process={} java={} os={}", c.app(),
+                c.mode(), c.console(), c.fileEnabled() ? c.file() + " -> " + c.logFile() : "off",
                 c.format().name().toLowerCase(java.util.Locale.ROOT), ProcessHandle.current().pid(),
+                String.format(java.util.Locale.ROOT, "%05x", Cause.process()),
                 System.getProperty("java.version"), System.getProperty("os.name"));
         if (!c.overrides().isEmpty()) {
             log.info("per-logger levels: {}", c.overrides());
@@ -238,8 +240,12 @@ public final class Logging {
 
     // --- capture, for tests --------------------------------------------------------------------------------
 
-    /** One delivered record. */
-    public record Entry(Instant time, Level level, String logger, String thread, String message, Throwable thrown) {
+    /**
+     * One delivered record. {@code cause} is the {@link Cause} the record was made in, {@link Cause#NONE} for work
+     * nobody wrapped.
+     */
+    public record Entry(Instant time, Level level, String logger, String thread, String message, Throwable thrown,
+                        long cause) {
     }
 
     /**
@@ -322,21 +328,24 @@ public final class Logging {
         }
         Instant now = Instant.now();
         String thread = Thread.currentThread().getName();
+        long cause = Cause.current();
         if (toCaptures) {
-            Entry entry = new Entry(now, level, logger, thread, message, thrown);
+            Entry entry = new Entry(now, level, logger, thread, message, thrown, cause);
             for (Capture capture : CAPTURES) {
                 capture.entries.add(entry);
             }
         }
         if (toConsole && stderr == null) {
-            String line = format(c.format(), CONSOLE_TIME, now, level, thread, logger, message, thrown);
+            // Without the cause: the console is read by a person as it scrolls, and an ID is only worth its width
+            // to someone joining the file against a trace.
+            String line = format(c.format(), CONSOLE_TIME, now, level, thread, Cause.NONE, logger, message, thrown);
             synchronized (CONSOLE_LOCK) {
                 System.err.print(line);
                 System.err.flush();
             }
         }
         if (toFile) {
-            s.file().write(format(c.format(), FILE_TIME, now, level, thread, logger, message, thrown),
+            s.file().write(format(c.format(), FILE_TIME, now, level, thread, cause, logger, message, thrown),
                     s.flushEach() || level.ordinal() >= Level.WARN.ordinal());
         }
         if (Probe.ON && level.ordinal() <= Level.DEBUG.ordinal() + 1) {
@@ -427,13 +436,24 @@ public final class Logging {
 
     // --- formats --------------------------------------------------------------------------------------------
 
+    /**
+     * One record as a line. In text, the cause sits in parentheses between the thread and the logger, and is left
+     * out, parentheses and all, when there is none, so a record made outside any cause reads as it always has:
+     * <pre>
+     *   2026-10-24T13:40:26.997Z INFO  [main] (3f2a1.t07.4f2) app.save - wrote 42 bytes
+     *   2026-10-24T13:40:27.001Z INFO  [vexelray-log-flush] app.save - flushed
+     * </pre>
+     */
     private static String format(LogConfig.Format format, DateTimeFormatter time, Instant at, Level level,
-                                 String thread, String logger, String message, Throwable thrown) {
+                                 String thread, long cause, String logger, String message, Throwable thrown) {
         if (format == LogConfig.Format.JSON) {
             StringBuilder sb = new StringBuilder(160);
             sb.append("{\"t\":\"").append(FILE_TIME.format(at)).append("\",\"level\":\"").append(level)
                     .append("\",\"thread\":\"");
             escape(sb, thread);
+            if (cause != Cause.NONE) {
+                sb.append("\",\"cause\":\"").append(Cause.format(cause));
+            }
             sb.append("\",\"logger\":\"");
             escape(sb, logger);
             sb.append("\",\"msg\":\"");
@@ -447,8 +467,11 @@ public final class Logging {
             return sb.append("}\n").toString();
         }
         StringBuilder sb = new StringBuilder(128);
-        sb.append(time.format(at)).append(' ').append(level.padded()).append(" [").append(thread).append("] ")
-                .append(logger).append(" - ").append(message).append('\n');
+        sb.append(time.format(at)).append(' ').append(level.padded()).append(" [").append(thread).append("] ");
+        if (cause != Cause.NONE) {
+            sb.append('(').append(Cause.format(cause)).append(") ");
+        }
+        sb.append(logger).append(" - ").append(message).append('\n');
         if (thrown != null) {
             sb.append(stack(thrown)).append('\n');
         }

@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -218,6 +219,72 @@ class CsvViewTest {
         List<CsvView.Row> rows = CsvView.read(file);
         assertEquals("a,b", rows.get(0).detail());
         assertEquals("plain", rows.get(1).detail(), "an empty cause is an empty column, not a missing one");
+    }
+
+    /**
+     * A small run as the probe writes it now: a timer firing twice, a click once, and a worker nobody wrapped. Each
+     * firing writes to the tree; the click writes once and also logs.
+     */
+    private static Path causedRun(Path dir) throws IOException {
+        String c = "seq,t_mono_ns,t_wall,thread,lane,kind,cause,detail\n";
+        return Files.writeString(dir.resolve("caused-run.csv"), c
+                + "1,0,w,main,app,cause.process,,3f2a1 pid=7\n"
+                + "2,1000,w,main,app,cause.source,,t00 krono.transport\n"
+                + "3,2000,w,main,app,cause.source,,i01 input.button\n"
+                + "4,100000000,w,main,layout,mutation layout,3f2a1.t00.1,node=4\n"
+                + "5,100000001,w,main,layout,mutation draw,3f2a1.t00.1,node=5\n"
+                + "6,200000000,w,main,layout,mutation layout,3f2a1.t00.2,node=4\n"
+                + "7,200000001,w,main,layout,mutation draw,3f2a1.t00.2,node=5\n"
+                + "8,250000000,w,main,input,pointer.press,3f2a1.i01.9,LEFT\n"
+                + "9,250000001,w,handler,layout,mutation layout,3f2a1.i01.9,node=8\n"
+                + "10,300000000,w,worker,layout,mutation draw,,node=9\n"
+                + "11,310000000,w,peer,layout,mutation draw,0bad1.c03.2,node=9\n");
+    }
+
+    @Test
+    void rowsAreCountedByTheSourceOfTheirCauses(@TempDir Path dir) throws IOException {
+        List<CsvView.Row> all = CsvView.read(causedRun(dir));
+        List<CsvView.CauseGroup> groups = CsvView.byCause(all, CsvView.filter(all, "layout", null, null, null), true);
+
+        // The timer's two firings are two causes and one source: the answer to "what writes so often?".
+        CsvView.CauseGroup timer = groups.get(0);
+        assertEquals("3f2a1.t00", timer.key());
+        assertEquals("krono.transport", timer.name(), "named by the file's own registration row");
+        assertEquals(2, timer.causes());
+        assertEquals(4, timer.rows());
+        assertEquals(Map.of("mutation layout", 2, "mutation draw", 2), timer.kinds());
+        assertEquals(4 / 0.100000001, timer.perSecond(), 1e-3, "over its own span, first row to last");
+
+        CsvView.CauseGroup click = groups.stream().filter(g -> g.key().equals("3f2a1.i01")).findFirst().orElseThrow();
+        assertEquals(1, click.rows(), "the press itself is input, not layout: the filter came first");
+        assertEquals("input.button", click.name());
+
+        // A worker nobody wrapped is a named gap, not an anonymous row.
+        assertTrue(groups.stream().anyMatch(g -> g.key().equals("- worker") && g.rows() == 1), groups.toString());
+        // A cause from another process keeps its own prefix, and this file cannot name its source.
+        assertTrue(groups.stream().anyMatch(g -> g.key().equals("0bad1.c03") && g.name().isEmpty()), groups.toString());
+    }
+
+    @Test
+    void byCauseEachFiringIsItsOwnGroup(@TempDir Path dir) throws IOException {
+        List<CsvView.Row> all = CsvView.read(causedRun(dir));
+        List<CsvView.CauseGroup> groups = CsvView.byCause(all, all, false);
+        assertTrue(groups.stream().anyMatch(g -> g.key().equals("3f2a1.t00.1") && g.rows() == 2 && g.causes() == 1));
+        assertTrue(groups.stream().anyMatch(g -> g.key().equals("3f2a1.i01.9") && g.rows() == 2),
+                "the press and the write it made are one cause");
+
+        String table = CsvView.causes(all, all, false);
+        assertTrue(table.startsWith("cause "), table);
+        assertTrue(table.contains("krono.transport") && table.contains("(no cause)"), table);
+    }
+
+    @Test
+    void aFileFromBeforeCausesIsAllUncaused(@TempDir Path dir) throws IOException {
+        Path file = new Log().frame(0).row(1, "worker", "app", "save", "x").write(dir, "old.csv");
+        List<CsvView.Row> rows = CsvView.read(file);
+        assertTrue(rows.stream().allMatch(r -> r.cause().isEmpty()));
+        List<CsvView.CauseGroup> groups = CsvView.byCause(rows, rows, true);
+        assertEquals(List.of("- loop", "- worker"), groups.stream().map(CsvView.CauseGroup::key).sorted().toList());
     }
 
     @Test

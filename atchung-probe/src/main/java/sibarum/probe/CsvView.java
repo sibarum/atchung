@@ -6,8 +6,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Reads back what {@code probe.format=csv} wrote: projections of the one file, and the gap hunt.
@@ -38,7 +43,19 @@ import java.util.Locale;
  * csvview run.csv --lane input      only the input lane
  * csvview run.csv --kind wake       kinds containing "wake"
  * csvview run.csv --grep Gui@421    any row mentioning it
+ * csvview run.csv --causes          rows per cause, most first
+ * csvview run.csv --sources --lane layout    the GUI's writes, per source of their causes
  * </pre>
+ *
+ * <h2>By cause</h2>
+ *
+ * Every row carries the cause it was made in (atchung's {@code docs/correlation.md}), so the rows can be counted
+ * by what set them off. The filters apply first and the grouping after, so "writes by cause" is the grouping of
+ * whatever lane holds the writes: this reader does not know what a write is, and does not need to. {@code --causes}
+ * groups by the cause itself, one click or one timer firing; {@code --sources} by what began it, the timer rather
+ * than its firings, which is the question when something happens a hundred times a second. Rows made in no cause
+ * are grouped by their thread, so a boundary nobody wrapped shows up as a named gap rather than as rows that seem
+ * to have no history.
  */
 public final class CsvView {
 
@@ -57,9 +74,33 @@ public final class CsvView {
         String detail();
     }
 
-    /** One row, parsed. {@code detail} keeps whatever the producer put there. */
+    /**
+     * One row, parsed. {@code detail} keeps whatever the producer put there. {@code cause} is as written,
+     * {@code 3f2a1.t07.4f2}, and empty for a row made in no cause or read from a file from before causes.
+     */
     public record Row(long seq, long monoNanos, String wall, String thread, String lane, String kind,
-                      String detail, String raw) implements Stamped {
+                      String cause, String detail, String raw) implements Stamped {
+    }
+
+    /**
+     * Rows that share a cause, or a source of causes: what {@link #byCause} answers.
+     *
+     * @param key    the cause ({@code 3f2a1.t07.4f2}) or the source ({@code 3f2a1.t07}); for rows in no cause,
+     *               {@code -} and the thread they were on
+     * @param name   the source's name as this file registered it, or empty when it did not (a cause from another
+     *               process, or rows in no cause)
+     * @param causes how many distinct causes the rows were in: 1 when grouped by cause
+     * @param rows   how many rows
+     * @param kinds  the rows' kinds and how many of each, most first
+     */
+    public record CauseGroup(String key, String name, int causes, int rows, long firstNanos, long lastNanos,
+                             Map<String, Integer> kinds) {
+
+        /** Rows per second over the group's own span, first row to last; 0 for a group of one instant. */
+        public double perSecond() {
+            long span = lastNanos - firstNanos;
+            return span <= 0 ? 0.0 : rows * 1e9 / span;
+        }
     }
 
     /**
@@ -161,12 +202,16 @@ public final class CsvView {
                       --kind <text>   kinds containing this
                       --thread <text> threads containing this
                       --grep <text>   rows mentioning this anywhere
-                      --tail <n>      only the last n rows""");
+                      --tail <n>      only the last n rows
+                      --causes        the kept rows counted per cause
+                      --sources       the kept rows counted per source of their causes""");
             System.exit(2);
             return;
         }
         Path file = Path.of(args[0]);
         List<Row> rows = read(file);
+        boolean causes = false;
+        boolean sources = false;
         String lanes = null;
         String kind = null;
         String thread = null;
@@ -187,6 +232,8 @@ public final class CsvView {
                 case "--thread" -> thread = args[++i];
                 case "--grep" -> grep = args[++i];
                 case "--tail" -> tail = Integer.parseInt(args[++i]);
+                case "--causes" -> causes = true;
+                case "--sources" -> sources = true;
                 default -> {
                     System.err.println("csvview: no option " + args[i]);
                     System.exit(2);
@@ -205,6 +252,10 @@ public final class CsvView {
             return;
         }
         List<Row> kept = filter(rows, lanes, kind, thread, grep);
+        if (causes || sources) {
+            System.out.print(causes(rows, kept, sources));
+            return;
+        }
         if (tail > 0 && kept.size() > tail) {
             kept = kept.subList(kept.size() - tail, kept.size());
         }
@@ -216,15 +267,19 @@ public final class CsvView {
     /** Parse a correlation log. Rows are returned in <b>time</b> order, which is the order to read them in. */
     public static List<Row> read(Path file) throws IOException {
         List<Row> rows = new ArrayList<>();
-        // Where detail is, from the header: after cause since causes were added, and sixth in a file from before.
+        // Where detail and cause are, from the header: cause before detail since causes were added, and no cause
+        // with detail sixth in a file from before.
         int detail = 6;
+        int cause = -1;
         for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
             if (line.isBlank()) {
                 continue;
             }
             if (line.startsWith("seq,")) {
-                int at = split(line).indexOf("detail");
+                List<String> header = split(line);
+                int at = header.indexOf("detail");
                 detail = at < 0 ? 6 : at;
+                cause = header.indexOf("cause");
                 continue;
             }
             List<String> f = split(line);
@@ -233,7 +288,7 @@ public final class CsvView {
             }
             try {
                 rows.add(new Row(Long.parseLong(f.get(0)), Long.parseLong(f.get(1)), f.get(2),
-                        f.get(3), f.get(4), f.get(5), f.get(detail), line));
+                        f.get(3), f.get(4), f.get(5), cause < 0 ? "" : f.get(cause), f.get(detail), line));
             } catch (NumberFormatException e) {
                 // Not a row. Skipping beats failing: the file is read while investigating something else.
             }
@@ -330,6 +385,104 @@ public final class CsvView {
         }
         sb.append("    to    ").append(gap.to().raw()).append("\n\n");
         return sb.toString();
+    }
+
+    /**
+     * {@code rows} grouped by cause, or by the source of their causes when {@code bySource}, most rows first.
+     *
+     * @param all  the whole file, which names the sources ({@code cause.source} rows) and the process
+     *             ({@code cause.process}); the names hold whatever was filtered out
+     * @param rows the rows to count, usually a {@link #filter} of {@code all}
+     */
+    public static List<CauseGroup> byCause(List<Row> all, List<Row> rows, boolean bySource) {
+        Map<String, String> names = sourceNames(all);
+        Map<String, List<Row>> groups = new LinkedHashMap<>();
+        for (Row r : rows) {
+            String key = r.cause().isEmpty() ? "- " + r.thread()
+                    : bySource ? sourceOf(r.cause()) : r.cause();
+            groups.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
+        }
+        List<CauseGroup> out = new ArrayList<>();
+        for (Map.Entry<String, List<Row>> g : groups.entrySet()) {
+            List<Row> members = g.getValue();
+            Set<String> distinct = new HashSet<>();
+            Map<String, Integer> kinds = new HashMap<>();
+            long first = Long.MAX_VALUE;
+            long last = Long.MIN_VALUE;
+            for (Row r : members) {
+                distinct.add(r.cause());
+                kinds.merge(r.kind(), 1, Integer::sum);
+                first = Math.min(first, r.monoNanos());
+                last = Math.max(last, r.monoNanos());
+            }
+            Map<String, Integer> sorted = new LinkedHashMap<>();
+            kinds.entrySet().stream()
+                    .sorted(Map.Entry.<String, Integer>comparingByValue().reversed()
+                            .thenComparing(Map.Entry.comparingByKey()))
+                    .forEach(e -> sorted.put(e.getKey(), e.getValue()));
+            String cause = members.get(0).cause();
+            String name = cause.isEmpty() ? "" : names.getOrDefault(sourceOf(cause), "");
+            out.add(new CauseGroup(g.getKey(), name, distinct.size(), members.size(), first, last, sorted));
+        }
+        out.sort(Comparator.comparingInt(CauseGroup::rows).reversed().thenComparing(CauseGroup::key));
+        return out;
+    }
+
+    /** {@link #byCause}, as a table: one line a group, and its commonest kinds. */
+    public static String causes(List<Row> all, List<Row> rows, boolean bySource) {
+        List<CauseGroup> groups = byCause(all, rows, bySource);
+        if (groups.isEmpty()) {
+            return "no rows to count\n";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format(Locale.ROOT, "%-22s %-24s %7s %7s %9s  %s%n", bySource ? "source" : "cause", "name",
+                "causes", "rows", "rows/s", "kinds"));
+        for (CauseGroup g : groups) {
+            StringBuilder kinds = new StringBuilder();
+            int shown = 0;
+            for (Map.Entry<String, Integer> k : g.kinds().entrySet()) {
+                if (shown++ == 3) {
+                    kinds.append(", ...");
+                    break;
+                }
+                kinds.append(shown > 1 ? ", " : "").append(k.getKey()).append(" ").append(k.getValue());
+            }
+            sb.append(String.format(Locale.ROOT, "%-22s %-24s %7d %7d %9.1f  %s%n", g.key(),
+                    g.name().isEmpty() ? (g.key().startsWith("- ") ? "(no cause)" : "?") : g.name(), g.causes(),
+                    g.rows(), g.perSecond(), kinds));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * The source a cause began from, {@code 3f2a1.t07} for {@code 3f2a1.t07.4f2}: the process and the source's key,
+     * so two processes' sources are never one.
+     */
+    static String sourceOf(String cause) {
+        int last = cause.lastIndexOf('.');
+        return last < 0 ? cause : cause.substring(0, last);
+    }
+
+    /** {@code 3f2a1.t07} to the name its {@code cause.source} row gave it, under this file's process prefix. */
+    private static Map<String, String> sourceNames(List<Row> all) {
+        String process = "";
+        Map<String, String> byKey = new HashMap<>();
+        for (Row r : all) {
+            if (r.kind().equals("cause.process")) {
+                int space = r.detail().indexOf(' ');
+                process = space < 0 ? r.detail() : r.detail().substring(0, space);
+            } else if (r.kind().equals("cause.source")) {
+                int space = r.detail().indexOf(' ');
+                if (space > 0) {
+                    byKey.put(r.detail().substring(0, space), r.detail().substring(space + 1));
+                }
+            }
+        }
+        Map<String, String> names = new HashMap<>();
+        for (Map.Entry<String, String> e : byKey.entrySet()) {
+            names.put(process + "." + e.getKey(), e.getValue());
+        }
+        return names;
     }
 
     /** Missing sequence numbers — dropped rows, which every other answer here would otherwise hide. */

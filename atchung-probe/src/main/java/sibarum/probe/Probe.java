@@ -210,6 +210,16 @@ public final class Probe {
      * An instant worth seeing in the trace: a state change, a mode switch, a fault. Recorded as a counter so
      * it still appears in the rollup, and printed with {@code detail} when tracing.
      */
+    /**
+     * A row that is written whenever the probe is tracing, whatever lanes are on, and counted nowhere: for the facts a
+     * reader needs to make sense of the other rows, such as which source a cause's key names.
+     */
+    static void note(Lane lane, String kind, String detail) {
+        if (TRACE) {
+            emit(lane, kind, detail);
+        }
+    }
+
     public static void mark(Lane lane, String name, String detail) {
         if (!ON || !lane.on) {
             return;
@@ -392,6 +402,7 @@ public final class Probe {
     private static void emit(Lane lane, String kind, String detail) {
         String d = detail == null ? "" : detail;
         String thread = Thread.currentThread().getName();
+        long cause = Cause.current();
         // Everything that does not depend on the row's place in the sequence is built before the lock: the
         // quoting, the text line, the formatted wall clock. Only the number and the monotonic stamp are taken
         // inside it, which is what makes seq, t_mono_ns and the file's own order agree.
@@ -400,7 +411,7 @@ public final class Probe {
         if (CSV) {
             Instant wall = Instant.now();
             wallNs = epochNanos(wall);
-            text = "," + wall + "," + tail(thread, lane, kind, d);
+            text = "," + wall + "," + tail(thread, lane, kind, cause, d);
         } else {
             text = prefix(lane) + kind + (d.isEmpty() ? "" : " " + d);
         }
@@ -410,7 +421,7 @@ public final class Probe {
             SINK.line(CSV ? n + "," + mono + text : text);
             Attached[] sinks = live;
             if (sinks.length > 0 && !delivering) {
-                deliver(sinks, n, mono, CSV ? wallNs : epochNanos(Instant.now()), thread, lane, kind, d);
+                deliver(sinks, n, mono, CSV ? wallNs : epochNanos(Instant.now()), thread, lane, kind, d, cause);
             }
         }
     }
@@ -421,12 +432,12 @@ public final class Probe {
      * what it missed by its {@code seq}. The failure is counted every time and reported once per sink.
      */
     private static void deliver(Attached[] sinks, long n, long mono, long wallNs, String thread, Lane lane,
-                                String kind, String detail) {
+                                String kind, String detail, long cause) {
         delivering = true;
         try {
             for (Attached a : sinks) {
                 try {
-                    a.sink.row(n, mono, wallNs, thread, lane, kind, detail);
+                    a.sink.row(n, mono, wallNs, thread, lane, kind, detail, cause);
                 } catch (Throwable t) {
                     // Throwable, not Exception: the contract is that nothing here throws, and a sink's
                     // AssertionError or StackOverflowError at a call site is still a crash the probe caused.
@@ -476,11 +487,12 @@ public final class Probe {
      * <p>This builds the part from {@code thread} on; {@link #emit} puts {@code seq}, {@code t_mono_ns} and
      * {@code t_wall} in front of it, the first two under the lock.
      */
-    private static String tail(String thread, Lane lane, String kind, String detail) {
+    private static String tail(String thread, Lane lane, String kind, long cause, String detail) {
         StringBuilder sb = new StringBuilder(64);
         field(sb, thread).append(',');
         field(sb, lane.key()).append(',');
         field(sb, kind).append(',');
+        sb.append(Cause.format(cause)).append(',');
         field(sb, detail);
         return sb.toString();
     }
@@ -569,6 +581,12 @@ public final class Probe {
         }
     }
 
+    /**
+     * The correlation log's columns. {@code cause} is before {@code detail} so that {@code detail} stays last, and a
+     * naive split on commas keeps working when it holds one.
+     */
+    static final String HEADER = "seq,t_mono_ns,t_wall,thread,lane,kind,cause,detail";
+
     private static String laneKeys() {
         StringBuilder sb = new StringBuilder();
         for (Lane lane : Lane.values()) {
@@ -591,9 +609,11 @@ public final class Probe {
             // The data file holds rows and nothing else. A banner in it is one line every consumer has to know
             // to skip, and the header is the one line they can all be told about instead.
             System.err.println(banner + " (csv)");
-            SINK.line("seq,t_mono_ns,t_wall,thread,lane,kind,detail");
+            SINK.line(HEADER);
+            // The first row names this process's causes, so a reader can tell which process a cause began in.
+            emit(Lane.APP, "cause.process", Cause.describeProcess());
         } else {
-            SINK.line(banner);
+            SINK.line(banner + " cause " + Cause.describeProcess());
         }
     }
 

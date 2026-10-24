@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ProbeCsvTest {
 
     private static final Path LOG = Path.of("target", "probe-test.csv");
-    private static final String HEADER = "seq,t_mono_ns,t_wall,thread,lane,kind,detail";
+    private static final String HEADER = "seq,t_mono_ns,t_wall,thread,lane,kind,cause,detail";
 
     private static List<String> lines() throws IOException {
         Probe.dump();                       // the rollup must not land in the data file; see below
@@ -46,6 +46,27 @@ class ProbeCsvTest {
 
         Probe.mark(Lane.APP, "csv.header.probe", "x");
         assertEquals(HEADER, lines().get(0), "one header, first, so a reader needs no other convention");
+    }
+
+    @Test
+    void theFirstRowNamesThisProcesssCauses() throws IOException {
+        String first = lines().get(1);
+        assertTrue(first.contains(",cause.process,"), "the row after the header introduces the process: " + first);
+        assertTrue(first.endsWith(Cause.describeProcess()), first);
+    }
+
+    @Test
+    void aRowCarriesTheCauseItWasWrittenIn() throws IOException {
+        Cause.Source source = Cause.source("csv.source", Cause.Kind.INPUT);
+        long cause = source.next();
+        Cause.within(cause, () -> Probe.mark(Lane.APP, "csv.caused", "x"));
+        Probe.mark(Lane.APP, "csv.uncaused", "x");
+
+        assertTrue(rowsFor("csv.caused").get(0).endsWith(",csv.caused," + Cause.format(cause) + ",x"),
+                "the cause, before the detail: " + rowsFor("csv.caused").get(0));
+        assertTrue(rowsFor("csv.uncaused").get(0).endsWith(",csv.uncaused,,x"), "and empty when there is none");
+        assertTrue(rowsFor("cause.source").stream().anyMatch(r -> r.endsWith(source.key() + " csv.source")),
+                "registering the source wrote the row that resolves its key");
     }
 
     @Test

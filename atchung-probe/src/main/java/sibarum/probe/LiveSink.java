@@ -5,7 +5,7 @@ package sibarum.probe;
  *
  * <p>Attach one with {@link Probe#attach} and it is handed every row the output gets — the same rows, in the same
  * order, under the same {@code seq} — for as long as it stays attached. A row is the correlation log's row
- * ({@code seq,t_mono_ns,t_wall,thread,lane,kind,detail}, see {@code docs/probe.md}) and means the same thing,
+ * ({@code seq,t_mono_ns,t_wall,thread,lane,kind,cause,detail}, see {@code docs/probe.md}) and means the same thing,
  * whatever format the file itself is in.
  *
  * <h2>The fields, not an object</h2>
@@ -45,4 +45,16 @@ public interface LiveSink {
      * @param detail  the producer's own detail, or {@code ""}
      */
     void row(long seq, long tMonoNs, long tWallNs, String thread, Lane lane, String kind, String detail);
+
+    /**
+     * One row, with the cause it was written in ({@link Cause#NONE} when there was none). This is the one the probe
+     * calls. It hands the row to {@link #row(long, long, long, String, Lane, String, String)} without its cause, so a
+     * sink written before causes existed goes on working; a sink that keeps causes overrides this as well.
+     *
+     * @param cause the cause, as {@link Cause#current()} gave it on the emitting thread
+     */
+    default void row(long seq, long tMonoNs, long tWallNs, String thread, Lane lane, String kind, String detail,
+                     long cause) {
+        row(seq, tMonoNs, tWallNs, thread, lane, kind, detail);
+    }
 }

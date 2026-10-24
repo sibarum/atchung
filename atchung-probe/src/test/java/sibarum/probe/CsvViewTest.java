@@ -209,6 +209,18 @@ class CsvViewTest {
     }
 
     @Test
+    void aFileWithCausesIsReadByItsHeader(@TempDir Path dir) throws IOException {
+        // Every test above writes the layout from before causes, which must go on reading: old recordings are still
+        // what people investigate. This is the layout the probe writes now, cause before detail.
+        Path file = Files.writeString(dir.resolve("caused.csv"), "seq,t_mono_ns,t_wall,thread,lane,kind,cause,detail\n"
+                + "1,1000,w,main,app,note,3f2a1.t07.4f2,\"a,b\"\n"
+                + "2,2000,w,main,app,note,,plain\n");
+        List<CsvView.Row> rows = CsvView.read(file);
+        assertEquals("a,b", rows.get(0).detail());
+        assertEquals("plain", rows.get(1).detail(), "an empty cause is an empty column, not a missing one");
+    }
+
+    @Test
     void aTornLastLineIsSkippedRatherThanFatal(@TempDir Path dir) throws IOException {
         // The normal shape of a log from the run this facility is for: one that was killed mid-write.
         Path file = Files.writeString(dir.resolve("torn.csv"), HEADER + "\n"

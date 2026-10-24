@@ -216,17 +216,24 @@ public final class CsvView {
     /** Parse a correlation log. Rows are returned in <b>time</b> order, which is the order to read them in. */
     public static List<Row> read(Path file) throws IOException {
         List<Row> rows = new ArrayList<>();
+        // Where detail is, from the header: after cause since causes were added, and sixth in a file from before.
+        int detail = 6;
         for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-            if (line.isBlank() || line.startsWith("seq,")) {
+            if (line.isBlank()) {
+                continue;
+            }
+            if (line.startsWith("seq,")) {
+                int at = split(line).indexOf("detail");
+                detail = at < 0 ? 6 : at;
                 continue;
             }
             List<String> f = split(line);
-            if (f.size() < 7) {
+            if (f.size() <= detail) {
                 continue;               // a torn last line: a run that was killed mid-write is the normal case
             }
             try {
                 rows.add(new Row(Long.parseLong(f.get(0)), Long.parseLong(f.get(1)), f.get(2),
-                        f.get(3), f.get(4), f.get(5), f.get(6), line));
+                        f.get(3), f.get(4), f.get(5), f.get(detail), line));
             } catch (NumberFormatException e) {
                 // Not a row. Skipping beats failing: the file is read while investigating something else.
             }

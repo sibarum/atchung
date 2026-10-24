@@ -138,9 +138,9 @@ The rows above are per **topic**: two mailboxes on one topic count into the same
 | `drop` | `<mailbox> <policy>` | the mailbox refused or shed a message, one row per message; `<policy>` is the `Backpressure` name (`FAIL`, `DROP_NEWEST`, `DROP_OLDEST`, `COALESCE_LATEST`) | the publisher's |
 
 ```
-seq,t_mono_ns,t_wall,thread,lane,kind,detail
-7,5102300,2026-10-19T03:12:39.101231Z,vexel-component-ui,bus,enqueue,dev.example.Worker#onJob 1
-9,5310800,2026-10-19T03:12:39.101440Z,vexel-component-worker,bus,deliver,dev.example.Worker#onJob 1
+seq,t_mono_ns,t_wall,thread,lane,kind,cause,detail
+7,5102300,2026-10-19T03:12:39.101231Z,vexel-component-ui,bus,enqueue,3f2a1.i02.1c,dev.example.Worker#onJob 1
+9,5310800,2026-10-19T03:12:39.101440Z,vexel-component-worker,bus,deliver,,dev.example.Worker#onJob 1
 ```
 
 An unnamed mailbox writes none of them. A `FAIL` mailbox writes its `drop` before the `Fatal` policy runs, so it is
@@ -182,10 +182,11 @@ or fields that split. `probe.format=csv` emits the same events as one row per li
 one. The file opens with its header and then holds rows and nothing else:
 
 ```
-seq,t_mono_ns,t_wall,thread,lane,kind,detail
-1,4185700,2026-09-02T04:31:07.882145Z,main,bus,input depth,3
-2,4213900,2026-09-02T04:31:07.882173Z,Loop,frame,frame.present,#41
-3,4219100,2026-09-02T04:31:07.882178Z,Loop,frame,loop.park,16ms
+seq,t_mono_ns,t_wall,thread,lane,kind,cause,detail
+1,4012200,2026-09-02T04:31:07.881972Z,main,app,cause.process,,3f2a1 pid=48213
+2,4185700,2026-09-02T04:31:07.882145Z,main,bus,input depth,3f2a1.i02.1c,3
+3,4213900,2026-09-02T04:31:07.882173Z,Loop,frame,frame.present,3f2a1.t04.29,#41
+4,4219100,2026-09-02T04:31:07.882178Z,Loop,frame,loop.park,,16ms
 ```
 
 The banner and every rollup go to **stderr** instead — including `Probe.dump()` — so the data file needs no
@@ -204,7 +205,11 @@ Four decisions in that row are worth knowing, because reading the file depends o
   single stack trace written that way ends the file's usefulness: `sort`, `grep -n` and `awk` stop describing
   events and start describing fragments of them. Newlines are flattened to spaces; commas and quotes are
   quoted the way a reader expects.
-- **`detail` is last**, so a naive split on commas keeps working when it contains one.
+- **`detail` is last**, so a naive split on commas keeps working when it contains one. That is why `cause`,
+  added 2026-10-24, sits before it: the cause the row was written in ([correlation.md](correlation.md)), empty
+  when there was none. The first row after the header is `cause.process`, which names the process its causes
+  began in, and a `cause.source` row resolves each source's key to its name. `CsvView` finds `detail` by the
+  header, so a file from before causes reads as it always did.
 
 The format is decided in the same static initialiser as the switch, so one process is one format for its whole
 life. There is one writer and one file on purpose: parallel writers are what make correlation lie, because

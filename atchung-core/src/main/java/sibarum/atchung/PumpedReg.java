@@ -3,6 +3,7 @@ package sibarum.atchung;
 import java.util.ArrayDeque;
 import java.util.HashMap;
 
+import sibarum.probe.Cause;
 import sibarum.probe.Lane;
 import sibarum.probe.Probe;
 
@@ -48,6 +49,12 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
      * fresh one rather than share a buffer somebody is still reading. Guarded by the lock.
      */
     private ArrayDeque<T> spare;
+    /**
+     * The cause each queued event was published in, in step with {@link #queue}; and the spare, in step with
+     * {@link #spare}. Null on a folding mailbox, whose {@link Slot}s carry their own. Guarded by the lock.
+     */
+    private CauseRing causes;
+    private CauseRing spareCauses;
 
     /**
      * One queued write on a folding mailbox: a link in the arrival-ordered chain {@link #head} … {@link #tail}.
@@ -57,6 +64,8 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     private static final class Slot<T> {
         Object cell;
         T event;
+        /** The cause {@link #event} was published in; a superseding write's replaces the write it supersedes. */
+        long cause;
         Slot<T> prev;
         Slot<T> next;
     }
@@ -131,6 +140,8 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
         int initial = Math.min(this.capacity, 64);
         this.queue = fold == null ? new ArrayDeque<>(initial) : null;
         this.spare = fold == null ? new ArrayDeque<>(initial) : null;
+        this.causes = fold == null ? new CauseRing(initial) : null;
+        this.spareCauses = fold == null ? new CauseRing(initial) : null;
         this.cells = fold == null ? null : new HashMap<>();
         this.poolCap = Math.min(this.capacity, 1024);
         this.depthName = Probe.ON ? topic.name() + " depth" : null;
@@ -142,6 +153,8 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
 
     @Override
     void doDeliver(T event) {
+        // On the publisher's thread, so this is the cause the event was published in.
+        long cause = Cause.current();
         boolean queued = false;
         synchronized (lock) {
             Object cell = fold == null ? null : fold.cell(event);
@@ -166,7 +179,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                         Atchung.fatal().fault(overflow);
                         throw overflow;
                     }
-                    enqueue(event, cell);
+                    enqueue(event, cell, cause);
                     queued = true;
                 }
                 case DROP_OLDEST -> {
@@ -179,12 +192,12 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                             Probe.mark(Lane.BUS, "drop", dropDetail);
                         }
                     }
-                    enqueue(event, cell);
+                    enqueue(event, cell, cause);
                     queued = true;
                 }
                 case DROP_NEWEST -> {
                     if (supersedes || queued() < capacity) {
-                        enqueue(event, cell);
+                        enqueue(event, cell, cause);
                         queued = true;
                     } else {
                         Probe.count(Lane.BUS, dropName);
@@ -202,7 +215,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                         }
                     }
                     clearQueue();
-                    enqueue(event, cell);
+                    enqueue(event, cell, cause);
                     queued = true;
                 }
                 case BLOCK -> {
@@ -218,7 +231,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
                             waiters--;
                         }
                     }
-                    enqueue(event, cell);
+                    enqueue(event, cell, cause);
                     queued = true;
                     if (interrupted) {
                         Thread.currentThread().interrupt();
@@ -242,10 +255,14 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
         }
     }
 
-    /** Queue {@code event}, superseding the queued write to {@code cell} if there is one. Caller holds the lock. */
-    private void enqueue(T event, Object cell) {
+    /**
+     * Queue {@code event}, published in {@code cause}, superseding the queued write to {@code cell} if there is one.
+     * Caller holds the lock.
+     */
+    private void enqueue(T event, Object cell, long cause) {
         if (fold == null) {
             queue.addLast(event);
+            causes.addLast(cause);
             return;
         }
         // Looked up again rather than taken from the caller: a BLOCK publisher may have waited since it asked, and
@@ -265,6 +282,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
             slots++;
         }
         slot.event = event;
+        slot.cause = cause;
         slot.prev = tail;
         slot.next = null;
         if (tail == null) {
@@ -307,6 +325,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     private void recycle(Slot<T> slot) {
         slot.cell = null;
         slot.event = null;
+        slot.cause = Cause.NONE;
         slot.prev = null;
         slot.next = null;
         if (freeCount < poolCap) {
@@ -325,6 +344,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     private void evictOldest() {
         if (fold == null) {
             queue.pollFirst();
+            causes.pollFirst();
             return;
         }
         Slot<T> oldest = head;
@@ -343,6 +363,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
     private void clearQueue() {
         if (fold == null) {
             queue.clear();
+            causes.clear();
             return;
         }
         Slot<T> slot = head;
@@ -372,6 +393,7 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
      */
     int drain() {
         ArrayDeque<T> batch = null;
+        CauseRing batchCauses = null;
         Slot<T> first = null;
         int count;
         synchronized (lock) {
@@ -381,9 +403,13 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
             }
             if (fold == null) {
                 batch = queue;
+                batchCauses = causes;
                 ArrayDeque<T> next = spare;
                 queue = next != null ? next : new ArrayDeque<>(Math.min(capacity, 64));
+                // The spares are set and taken together, so the cause ring is there exactly when the queue is.
+                causes = next != null ? spareCauses : new CauseRing(Math.min(capacity, 64));
                 spare = null;
+                spareCauses = null;
             } else {
                 first = head;
                 head = null;
@@ -402,48 +428,62 @@ final class PumpedReg<T> extends Atchung.Reg<T> {
             Probe.mark(Lane.BUS, "deliver", rowName, count);
         }
         if (fold == null) {
-            deliverQueue(batch);
+            deliverQueue(batch, batchCauses);
         } else {
             deliverChain(first);
         }
         return count;
     }
 
-    /** Walk a detached queue, then offer it back as the next spare. Runs outside the lock. */
-    private void deliverQueue(ArrayDeque<T> batch) {
+    /**
+     * Walk a detached queue, each event's handler inside the cause it was published in, then offer the queue and its
+     * causes back as the next spares. The drainer's own cause is put back at the end, however the walk ends. Runs
+     * outside the lock.
+     */
+    private void deliverQueue(ArrayDeque<T> batch, CauseRing batchCauses) {
+        long drainer = Cause.current();
         try {
             // pollFirst rather than an iterator: an iterator is an allocation per drain, and an ArrayDeque holds
             // no nulls, so null is the end.
             T event;
             while ((event = batch.pollFirst()) != null) {
+                Cause.enter(batchCauses.pollFirst());
                 subscriber.on(event);
             }
         } finally {
+            Cause.exit(drainer);
             batch.clear();
+            batchCauses.clear();
             synchronized (lock) {
                 if (spare == null) {
                     spare = batch;
+                    spareCauses = batchCauses;
                 }
             }
         }
     }
 
     /**
-     * Walk a detached slot chain, then return its slots to the pool. Runs outside the lock; the chain is blanked
+     * Walk a detached slot chain, each handler inside its slot's cause, then return its slots to the pool and put the
+     * drainer's own cause back. Runs outside the lock; the chain is blanked
      * and cut to the pool's size here too, so that the lock is held only for the O(1) splice.
      */
     private void deliverChain(Slot<T> first) {
+        long drainer = Cause.current();
         try {
             for (Slot<T> slot = first; slot != null; slot = slot.next) {
+                Cause.enter(slot.cause);
                 subscriber.on(slot.event);
             }
         } finally {
+            Cause.exit(drainer);
             Slot<T> last = null;
             int kept = 0;
             for (Slot<T> slot = first; slot != null; ) {
                 Slot<T> next = slot.next;
                 slot.cell = null;
                 slot.event = null;
+                slot.cause = Cause.NONE;
                 slot.prev = null;
                 if (kept < poolCap) {
                     last = slot;

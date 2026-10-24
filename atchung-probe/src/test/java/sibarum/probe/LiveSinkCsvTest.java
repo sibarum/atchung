@@ -27,11 +27,13 @@ class LiveSinkCsvTest {
     private static final Path LOG = Path.of("target", "probe-test.csv");
 
     /** A row as a sink saw it, with the fields rendered the way the file renders them. */
-    record Row(long seq, long mono, long wallNs, String thread, String lane, String kind, String detail) {
+    record Row(long seq, long mono, long wallNs, String thread, String lane, String kind, String detail,
+               long cause) {
 
         String asCsv() {
             Instant wall = Instant.ofEpochSecond(wallNs / 1_000_000_000L, wallNs % 1_000_000_000L);
-            return seq + "," + mono + "," + wall + "," + thread + "," + lane + "," + kind + "," + detail;
+            return seq + "," + mono + "," + wall + "," + thread + "," + lane + "," + kind + "," + Cause.format(cause)
+                    + "," + detail;
         }
     }
 
@@ -41,7 +43,13 @@ class LiveSinkCsvTest {
         @Override
         public void row(long seq, long tMonoNs, long tWallNs, String thread, Lane lane, String kind,
                         String detail) {
-            rows.add(new Row(seq, tMonoNs, tWallNs, thread, lane.key(), kind, detail));
+            row(seq, tMonoNs, tWallNs, thread, lane, kind, detail, Cause.NONE);
+        }
+
+        @Override
+        public void row(long seq, long tMonoNs, long tWallNs, String thread, Lane lane, String kind,
+                        String detail, long cause) {
+            rows.add(new Row(seq, tMonoNs, tWallNs, thread, lane.key(), kind, detail, cause));
         }
     }
 
@@ -175,6 +183,6 @@ class LiveSinkCsvTest {
             Probe.detach(chatty);
         }
         assertEquals(List.of("live.origin"), kinds);
-        assertTrue(Files.readString(LOG).contains(",live.echo,live.origin"), "the nested row still reaches the file");
+        assertTrue(Files.readString(LOG).contains(",live.echo,,live.origin"), "the nested row still reaches the file");
     }
 }

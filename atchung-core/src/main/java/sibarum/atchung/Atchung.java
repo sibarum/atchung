@@ -6,6 +6,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 
+import sibarum.probe.Cause;
 import sibarum.probe.Lane;
 import sibarum.probe.Probe;
 import sibarum.probe.Zone;
@@ -83,6 +84,11 @@ public final class Atchung {
      */
     public <T> void publish(Topic<T> topic, T event) {
         Objects.requireNonNull(topic, "topic");
+        // A publish nobody gave a cause: counted under its thread, so a boundary nobody wrapped is a named gap in the
+        // report rather than rows that seem to have no history. Composed only when profiling.
+        if (Probe.ON && Cause.current() == Cause.NONE) {
+            Probe.count(Lane.BUS, "uncaused " + Thread.currentThread().getName());
+        }
         CopyOnWriteArrayList<Reg<?>> regs = registry.get(topic);
         if (regs == null) {
             // Counted even though nothing happens: a publish with no subscriber is the shape of a whole class
@@ -202,9 +208,18 @@ public final class Atchung {
             this.executor = executor;
         }
 
+        /** The handler runs on the executor's thread inside the cause the event was published in. */
         @Override
         void doDeliver(T event) {
-            executor.execute(() -> subscriber.on(event));
+            long cause = Cause.current();
+            executor.execute(() -> {
+                long previous = Cause.enter(cause);
+                try {
+                    subscriber.on(event);
+                } finally {
+                    Cause.exit(previous);
+                }
+            });
         }
     }
 

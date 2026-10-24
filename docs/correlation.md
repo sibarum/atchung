@@ -1,6 +1,6 @@
 # Correlation: every message knows what caused it
 
-Status: **proposed 2026-10-24.** Written for `vexelray-gui/docs/plans/export.md` (its M2), which needs to say, for
+Status: **proposed 2026-10-24; step 1 done 2026-10-24.** Written for `vexelray-gui/docs/plans/export.md` (its M2), which needs to say, for
 every GUI write in a capture, what set it off. Lands here because the bus, the log and the probe are all here.
 
 ## Why
@@ -50,11 +50,17 @@ Each source keeps its own counter, so beginning a cause touches nothing another 
 
 ## Carrying it
 
-**On the thread: a `ScopedValue`** (final in JDK 25), held by `sibarum.probe.Cause` in `atchung-probe`, which the
-bus, the log and every repo already depend on. Not a `ThreadLocal`: a scoped value is bound for a dynamic extent
-and gone when it ends, so it cannot be lost inside the extent and cannot leak into the next message a thread
-handles. `Cause.current()` reads it, `Cause.begin(source, body)` starts the source's next one around `body`, and
-`Cause.within(id, body)` re-enters one that was carried.
+**On the thread: a per-thread slot with no setter**, held by `sibarum.probe.Cause` in `atchung-probe`, which the
+bus, the log and every repo already depend on. `Cause.current()` reads it, `Cause.begin(source, body)` starts the
+source's next one around `body`, and `Cause.within(id, body)` re-enters one that was carried; both put back the
+cause they found when the body ends, however it ends. A message runtime that cannot afford a lambda per message
+uses `Cause.enter(id)` and `Cause.exit(previous)`, always paired in a `finally`. So a cause cannot outlive the work it
+was entered for, and cannot leak into the next message a thread handles.
+
+The first draft said a `ScopedValue`, which gives that guarantee by construction. It was given up on building it:
+binding a scoped value allocates, and a pumped mailbox re-enters a cause for every event it drains while promising
+that a drain allocates nothing (`DrainBufferTest`). The slot gives the same guarantee by having no way to set a
+cause except around a body.
 
 **Through the bus, by delivery mode:**
 
@@ -84,7 +90,10 @@ it runs. Each is a one-line wrap at the place the outside world comes in.
 
 - **`Log`** writes the cause on every record, as a field of the file format, filled from `Cause.current()` when
   the record is made. Nobody passes it.
-- **`Probe`** gives its CSV a `cause` column, after `frame`, so readers that go by column name see nothing change.
+- **`Probe`** gives its CSV a `cause` column, before `detail`, which stays last (see `probe.md`). Readers that go
+  by column name, as the Inspector does, see nothing change, and `CsvView` finds `detail` by the header. Live
+  sinks get the cause through a second `LiveSink.row` overload whose default drops it, so a sink written before
+  causes goes on working.
   Every row made inside a cause carries it, the mutation rows of `vexelray-gui`'s `layout` lane included, with no
   change at their call sites.
 - **`CsvView`** gains a by-cause view: rows and their count per cause, its kind, and the mailboxes it passed

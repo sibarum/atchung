@@ -108,8 +108,12 @@ it runs. Each is a one-line wrap at the place the outside world comes in.
   causes goes on working.
   Every row made inside a cause carries it, the mutation rows of `vexelray-gui`'s `layout` lane included, with no
   change at their call sites.
-- **`CsvView`** gains a by-cause view: rows and their count per cause, its kind, and the mailboxes it passed
-  through, which is the first table an export needs.
+- **`CsvView`** gains a by-cause view, the first table an export needs. Done 2026-10-24: `--causes` counts the
+  kept rows per cause and `--sources` per source of their causes, each with its name (from the file's own
+  `cause.source` rows), how many causes, rows, rows per second over its own span, and its commonest kinds. The
+  filters apply first, so the GUI's writes by cause are `csvview run.csv --sources --lane layout`; rows in no cause
+  are grouped by thread. In code, `CsvView.byCause`. Not yet: the mailboxes a cause passed through, which no row
+  records today.
 
 ## Gaps are counted, not hidden
 

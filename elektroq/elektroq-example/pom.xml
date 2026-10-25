@@ -7,7 +7,7 @@
     <parent>
         <groupId>sibarum.elektro.queue</groupId>
         <artifactId>elektroq</artifactId>
-        <version>1.2-SNAPSHOT</version>
+        <version>1.2</version>
     </parent>
 
     <artifactId>elektroq-example</artifactId>
@@ -30,12 +30,12 @@
         <dependency>
             <groupId>sibarum.elektro.queue</groupId>
             <artifactId>elektroq-core</artifactId>
-            <version>1.2-SNAPSHOT</version>
+            <version>1.2</version>
         </dependency>
         <dependency>
             <groupId>sibarum.elektro.queue</groupId>
             <artifactId>elektroq-transport-tcp</artifactId>
-            <version>1.2-SNAPSHOT</version>
+            <version>1.2</version>
         </dependency>
     </dependencies>
 
@@ -53,12 +53,12 @@
                         <path>
                             <groupId>sibarum.elektro.queue</groupId>
                             <artifactId>elektroq-codegen</artifactId>
-                            <version>1.2-SNAPSHOT</version>
+                            <version>1.2</version>
                         </path>
                         <path>
                             <groupId>sibarum.elektro.queue</groupId>
                             <artifactId>elektroq-core</artifactId>
-                            <version>1.2-SNAPSHOT</version>
+                            <version>1.2</version>
                         </path>
                         <!-- And intrabuf's, for the @IntrabufMessage record (Telemetry). -->
                         <path>

@@ -7,7 +7,7 @@
     <parent>
         <groupId>sibarum.atchung</groupId>
         <artifactId>atchung</artifactId>
-        <version>1.2-SNAPSHOT</version>
+        <version>1.2</version>
     </parent>
 
     <artifactId>atchung-elektroq</artifactId>
@@ -25,13 +25,13 @@
         <dependency>
             <groupId>sibarum.elektro.queue</groupId>
             <artifactId>elektroq-core</artifactId>
-            <version>1.2-SNAPSHOT</version>
+            <version>1.2</version>
         </dependency>
 
         <dependency>
             <groupId>sibarum.elektro.queue</groupId>
             <artifactId>elektroq-transport-local</artifactId>
-            <version>1.2-SNAPSHOT</version>
+            <version>1.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>

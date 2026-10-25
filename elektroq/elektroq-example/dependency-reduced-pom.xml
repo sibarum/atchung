@@ -3,7 +3,7 @@
   <parent>
     <artifactId>elektroq</artifactId>
     <groupId>sibarum.elektro.queue</groupId>
-    <version>1.2-SNAPSHOT</version>
+    <version>1.3-SNAPSHOT</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>elektroq-example</artifactId>
@@ -20,12 +20,12 @@
             <path>
               <groupId>sibarum.elektro.queue</groupId>
               <artifactId>elektroq-codegen</artifactId>
-              <version>1.2-SNAPSHOT</version>
+              <version>1.3-SNAPSHOT</version>
             </path>
             <path>
               <groupId>sibarum.elektro.queue</groupId>
               <artifactId>elektroq-core</artifactId>
-              <version>1.2-SNAPSHOT</version>
+              <version>1.3-SNAPSHOT</version>
             </path>
             <path>
               <groupId>sibarum.intrabuf</groupId>

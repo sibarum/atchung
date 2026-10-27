@@ -24,7 +24,8 @@ public final class MailboxOverflow extends RuntimeException {
     /** Frames of this package that are the bus itself, skipped when naming the caller that published. */
     private static final Set<String> INTERNAL = Set.of(
             "sibarum.atchung.Atchung", "sibarum.atchung.Atchung$Reg", "sibarum.atchung.PumpedReg",
-            "sibarum.atchung.MailboxOverflow");
+            "sibarum.atchung.MailboxOverflow", "sibarum.atchung.Tick",
+            "sibarum.atchung.TickReg", "sibarum.atchung.Inbox", "sibarum.atchung.Sender");
 
     private final transient Topic<?> topic;
     private final int capacity;

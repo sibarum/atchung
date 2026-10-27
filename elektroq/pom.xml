@@ -6,7 +6,7 @@
 
     <groupId>sibarum.elektro.queue</groupId>
     <artifactId>elektroq</artifactId>
-    <version>1.3-SNAPSHOT</version>
+    <version>1.4-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <properties>
@@ -19,7 +19,7 @@
         <!-- intrabuf: the envelope's header roles, and intrabuf-backed message types. Installed to the
              local .m2 by `mvn install` in the sibling intrabuf repo. -->
         <intrabuf.version>0.1.3-SNAPSHOT</intrabuf.version>
-        <atchung.version>1.3-SNAPSHOT</atchung.version>
+        <atchung.version>1.4-SNAPSHOT</atchung.version>
     </properties>
 
     <modules>

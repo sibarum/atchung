@@ -1,0 +1,295 @@
+package sibarum.atchung;
+
+import java.util.Arrays;
+import java.util.Objects;
+import java.util.Set;
+
+import sibarum.probe.Cause;
+import sibarum.probe.Lane;
+import sibarum.probe.Probe;
+
+/**
+ * A component's inbox in a {@link Tick}: one queue for every topic the component subscribes to, so its messages
+ * arrive in one order whichever topic each came on. Made by {@link Tick#inbox}.
+ *
+ * <p>A component subscribes here ({@link #subscribe}) and sends through a {@link Sender} it takes from here
+ * ({@link #sender}). The sender is what knows whether a send happens inside one of this inbox's deliveries, and so
+ * whether it belongs to the round (see {@link Tick}) or is a message from outside, to be staged for the next tick.
+ */
+public final class Inbox {
+
+    final Tick tick;
+    final String name;
+    final int lane;
+    /** Where this inbox is in the order outboxes are emptied in. */
+    final int position;
+
+    /**
+     * One queued message: a link in this inbox's arrival-ordered chain. Recycled, so queueing allocates nothing. Its
+     * fields are touched by the coordinator between rounds and by this inbox's lane during one, never both at once.
+     */
+    static final class Entry {
+        TickReg<?> reg;
+        Object event;
+        /** The piece of state the message writes, or null for an edge. */
+        Object key;
+        long cause;
+        int hops;
+        Entry prev;
+        Entry next;
+    }
+
+    Entry head;
+    private Entry tail;
+    private Entry free;
+    private int freeCount;
+    /** How many recycled entries are worth keeping: enough for a busy tick, not a burst's worth forever. */
+    private static final int POOL = 1024;
+
+    // This inbox's outbox: what its component sent during the round, emptied by the coordinator at the round's end.
+    Topic<?>[] outTopics = new Topic<?>[16];
+    Object[] outEvents = new Object[16];
+    long[] outCauses = new long[16];
+    int[] outHops = new int[16];
+    int outSize;
+
+    /**
+     * The thread delivering to this inbox right now, or null. Written only by that thread, before and after a
+     * delivery, so a thread that reads itself here is inside one: any other thread reads null or another thread,
+     * however stale its view, and never itself.
+     */
+    Thread delivering;
+    /** The hops of the message being delivered. Meaningful only to {@link #delivering}. */
+    private int hops;
+    int deliveredThisRound;
+    /** What a subscriber threw in this round, for the coordinator to rethrow. */
+    Throwable failure;
+
+    Inbox(Tick tick, String name, int lane, int position) {
+        this.tick = tick;
+        this.name = name;
+        this.lane = lane;
+        this.position = position;
+    }
+
+    /** This inbox's name, as the tick was told it. */
+    public String name() {
+        return name;
+    }
+
+    /**
+     * Subscribe to {@code topic}. An edge mailbox holds at most {@code capacity} messages; one more is a fault, as a
+     * {@link Backpressure#FAIL} mailbox's is. A state subscription holds one message per key and cannot overflow, so
+     * {@code capacity} counts only its edges, of which it has none.
+     */
+    public <T> Subscription subscribe(Topic<T> topic, Subscriber<T> subscriber, int capacity) {
+        return subscribe(topic, subscriber, capacity, null);
+    }
+
+    /**
+     * As {@link #subscribe(Topic, Subscriber, int)}, delivering only messages whose key is in {@code keys}. Only a
+     * {@link Topic.Kind#STATE state} topic has keys, so a filter on an edge topic is refused.
+     */
+    public <T> Subscription subscribe(Topic<T> topic, Subscriber<T> subscriber, int capacity, Set<?> keys) {
+        Objects.requireNonNull(topic, "topic");
+        Objects.requireNonNull(subscriber, "subscriber");
+        if (keys != null && topic.kind() != Topic.Kind.STATE) {
+            throw new IllegalArgumentException("topic '" + topic.name() + "' is an edge, and only a state topic has "
+                    + "keys to filter by");
+        }
+        TickReg<T> reg = new TickReg<>(this, topic, subscriber, capacity, keys == null ? null : Set.copyOf(keys));
+        Subscription busSub = tick.bus.register(reg);
+        return new Subscription() {
+            @Override
+            public boolean isActive() {
+                return busSub.isActive();
+            }
+
+            @Override
+            public void pause() {
+                busSub.pause();
+            }
+
+            @Override
+            public void resume() {
+                busSub.resume();
+            }
+
+            @Override
+            public boolean isPaused() {
+                return busSub.isPaused();
+            }
+
+            @Override
+            public void close() {
+                reg.closed = true;
+                busSub.close();
+            }
+        };
+    }
+
+    /** What this inbox's component sends {@code topic} through. */
+    public <T> Sender<T> sender(Topic<T> topic) {
+        return new Sender<>(this, Objects.requireNonNull(topic, "topic"));
+    }
+
+    // ------------------------------------------------------------------------------------------- the coordinator
+
+    /** Queue a message for {@code reg} at the back, or in place of the queued write to its key. */
+    <T> void enqueue(TickReg<T> reg, T event, Object key, long cause, int hops) {
+        if (key != null) {
+            Entry queued = reg.cells.get(key);
+            if (queued != null) {
+                // Unlinked and relinked at the back, as Fold explains: the survivor belongs where the write that
+                // survived was, after any edge that arrived between the two.
+                unlink(queued);
+                link(queued, event, cause, hops);
+                return;
+            }
+        }
+        Entry e = obtain();
+        e.reg = reg;
+        e.key = key;
+        link(e, event, cause, hops);
+        if (key != null) {
+            reg.cells.put(key, e);
+        } else {
+            reg.edges++;
+        }
+    }
+
+    private void link(Entry e, Object event, long cause, int hops) {
+        e.event = event;
+        e.cause = cause;
+        e.hops = hops;
+        e.prev = tail;
+        e.next = null;
+        if (tail == null) {
+            head = e;
+        } else {
+            tail.next = e;
+        }
+        tail = e;
+    }
+
+    private void unlink(Entry e) {
+        if (e.prev == null) {
+            head = e.next;
+        } else {
+            e.prev.next = e.next;
+        }
+        if (e.next == null) {
+            tail = e.prev;
+        } else {
+            e.next.prev = e.prev;
+        }
+        e.prev = null;
+        e.next = null;
+    }
+
+    private Entry obtain() {
+        Entry e = free;
+        if (e == null) {
+            return new Entry();
+        }
+        free = e.next;
+        freeCount--;
+        e.next = null;
+        return e;
+    }
+
+    private void recycle(Entry e) {
+        e.reg = null;
+        e.event = null;
+        e.key = null;
+        e.cause = Cause.NONE;
+        e.prev = null;
+        e.next = null;
+        if (freeCount < POOL) {
+            e.next = free;
+            free = e;
+            freeCount++;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------- the lane
+
+    /**
+     * Deliver everything queued, in order, on the calling thread. A message queued during this call (there are none:
+     * sends go to the outbox) would wait for the next round. If a subscriber throws, the throw is kept for the
+     * coordinator and the rest stays queued, so nothing is lost by the failure of one delivery.
+     */
+    void deliver() {
+        if (head == null) {
+            return;
+        }
+        Thread me = Thread.currentThread();
+        long lane = Cause.current();
+        long now = System.currentTimeMillis();
+        delivering = me;
+        try {
+            Entry e;
+            while ((e = head) != null) {
+                head = e.next;
+                if (head == null) {
+                    tail = null;
+                } else {
+                    head.prev = null;
+                }
+                TickReg<?> reg = e.reg;
+                Object event = e.event;
+                hops = e.hops;
+                long cause = e.cause;
+                if (e.key != null) {
+                    reg.cells.remove(e.key);
+                } else {
+                    reg.edges--;
+                }
+                recycle(e);
+                if (reg.closed) {
+                    continue;
+                }
+                reg.delivered++;
+                reg.lastDeliveredMillis = now;
+                Cause.enter(cause);
+                deliverTo(reg, event);
+                deliveredThisRound++;
+            }
+        } catch (RuntimeException | Error t) {
+            failure = t;
+            if (Probe.ON) {
+                Probe.mark(Lane.BUS, "tick failure", name);
+            }
+        } finally {
+            Cause.exit(lane);
+            delivering = null;
+            hops = 0;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> void deliverTo(TickReg<T> reg, Object event) {
+        reg.subscriber.on((T) event);
+    }
+
+    /** A send from inside one of this inbox's deliveries: into the outbox, for the end of the round. */
+    void post(Topic<?> topic, Object event) {
+        int n = outSize;
+        if (n == outTopics.length) {
+            outTopics = Arrays.copyOf(outTopics, n * 2);
+            outEvents = Arrays.copyOf(outEvents, n * 2);
+            outCauses = Arrays.copyOf(outCauses, n * 2);
+            outHops = Arrays.copyOf(outHops, n * 2);
+        }
+        outTopics[n] = topic;
+        outEvents[n] = event;
+        outCauses[n] = Cause.current();
+        outHops[n] = hops + 1;
+        outSize = n + 1;
+    }
+
+    @Override
+    public String toString() {
+        return "Inbox[" + name + ", lane " + lane + "]";
+    }
+}

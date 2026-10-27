@@ -1,9 +1,9 @@
 package sibarum.atchung;
 
+import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 
 import sibarum.probe.Cause;
@@ -38,7 +38,14 @@ public final class Atchung {
         static final Atchung GLOBAL = new Atchung();
     }
 
-    private final ConcurrentMap<Topic<?>, CopyOnWriteArrayList<Reg<?>>> registry = new ConcurrentHashMap<>();
+    /**
+     * Each topic's registrations, as an array that is never changed: registering or unregistering swaps in a new one. A
+     * publish reads it once and walks a snapshot by index, so it neither allocates an iterator nor sees a registration
+     * set that changed under it, and a topic with nobody left on it has no entry at all.
+     */
+    private final ConcurrentMap<Topic<?>, Reg<?>[]> registry = new ConcurrentHashMap<>();
+
+    private static final Reg<?>[] NONE = new Reg<?>[0];
 
     /**
      * What the process does when the bus detects a fault it cannot honestly continue past — see {@link Fatal}.
@@ -89,7 +96,7 @@ public final class Atchung {
         if (Probe.ON && Cause.current() == Cause.NONE) {
             Probe.count(Lane.BUS, "uncaused " + Thread.currentThread().getName());
         }
-        CopyOnWriteArrayList<Reg<?>> regs = registry.get(topic);
+        Reg<?>[] regs = registry.get(topic);
         if (regs == null) {
             // Counted even though nothing happens: a publish with no subscriber is the shape of a whole class
             // of "the event never arrived" bug, and it is invisible from either end without this line. It
@@ -127,24 +134,68 @@ public final class Atchung {
         return new Pump(this);
     }
 
+    /**
+     * Create a {@link Tick}: components' inboxes, drained together in rounds, in one order. See {@link Tick}.
+     *
+     * @param arrival called after a message from outside the tick has been staged for the next one, on the
+     *                publisher's thread and holding no lock: where a frame loop is woken. May be null.
+     */
+    public Tick tick(Runnable arrival) {
+        return new Tick(this, arrival, Tick.DEFAULT_MAX_HOPS);
+    }
+
+    /** As {@link #tick(Runnable)}, with the longest chain of messages a tick allows before calling it a loop. */
+    public Tick tick(Runnable arrival, int maxHops) {
+        return new Tick(this, arrival, maxHops);
+    }
+
     /** @return the number of active subscribers on {@code topic}. */
     public int subscriberCount(Topic<?> topic) {
-        CopyOnWriteArrayList<Reg<?>> regs = registry.get(topic);
-        return regs == null ? 0 : regs.size();
+        Reg<?>[] regs = registry.get(topic);
+        return regs == null ? 0 : regs.length;
     }
 
     // --- internal registration --------------------------------------------
 
     <T> Subscription register(Reg<T> reg) {
-        registry.computeIfAbsent(reg.topic(), k -> new CopyOnWriteArrayList<>()).add(reg);
+        registry.compute(reg.topic(), (topic, regs) -> {
+            Reg<?>[] now = regs == null ? NONE : regs;
+            // Two declarations of one channel that disagree about its kind would have one subscriber folding what
+            // another treats as edges, which is the channel with no correct policy. Refused at the second
+            // subscription, where both declarations are in hand. Checked against one existing registration: every one
+            // of them passed this.
+            if (now.length > 0 && now[0].topic().kind() != reg.topic().kind()) {
+                throw new IllegalStateException("topic '" + reg.topic().name() + "' is declared as "
+                        + reg.topic().kind() + " here and as " + now[0].topic().kind() + " by an existing "
+                        + "subscriber: a channel carries one kind, so every declaration of it must say the same one");
+            }
+            Reg<?>[] next = Arrays.copyOf(now, now.length + 1);
+            next[now.length] = reg;
+            return next;
+        });
         return new RegSubscription(reg);
     }
 
+    /** The registrations on {@code topic}, or null when there are none: for a {@link Tick} fanning out a round. */
+    Reg<?>[] registered(Topic<?> topic) {
+        return registry.get(topic);
+    }
+
     void unregister(Reg<?> reg) {
-        CopyOnWriteArrayList<Reg<?>> regs = registry.get(reg.topic());
-        if (regs != null) {
-            regs.remove(reg);
-        }
+        registry.computeIfPresent(reg.topic(), (topic, regs) -> {
+            for (int i = 0; i < regs.length; i++) {
+                if (regs[i] == reg) {
+                    if (regs.length == 1) {
+                        return null;
+                    }
+                    Reg<?>[] next = new Reg<?>[regs.length - 1];
+                    System.arraycopy(regs, 0, next, 0, i);
+                    System.arraycopy(regs, i + 1, next, i, regs.length - i - 1);
+                    return next;
+                }
+            }
+            return regs;
+        });
     }
 
     private static <T> Subscriber<T> requireSub(Subscriber<T> subscriber) {

@@ -25,7 +25,7 @@ delivery is opt-in and lives entirely in elektro-Q and the bridge — the bus co
 
 | Module | What it provides |
 |---|---|
-| `atchung-core` | The event bus: `Topic`, `Atchung`, inline/async/pumped delivery, `Backpressure`, pause/resume, and the `State<T>` synchronization primitive. Pure Java, no dependencies. |
+| `atchung-core` | The event bus: `Topic` (state or edge), `Atchung`, inline/async/pumped delivery, `Backpressure`, pause/resume, the `Tick` that drains many components' inboxes in one order, and the `State<T>` synchronization primitive. Pure Java, no dependencies. |
 | `atchung-probe` | The stack-wide profiling seam: `Probe`, `Lane`, spans, counters and a resource ledger. Off unless asked, free when off, and dependency-free so any layer can take it without taking the bus. The trace is aligned text for a person watching a run, or a correlation CSV (`probe.format=csv`) for a program reading one afterwards — `CsvView` reads that file back and hunts it for stalls. See [`docs/probe.md`](docs/probe.md). |
 | `atchung-elektroq` | `ElektroBridge` — wires an `Atchung` bus to an elektro-Q `Conduit`, both directions, with loop prevention. |
 | `elektroq/` | The cross-process stack (own aggregator; coordinates `sibarum.elektro.queue:*`). See [`elektroq/README.md`](elektroq/README.md) for the full tutorial. Modules: `elektroq-core`, `elektroq-codegen`, `elektroq-transport-tcp`, `elektroq-transport-uds`, `elektroq-transport-local`, `elektroq-netcode`, `elektroq-example`. |
@@ -71,6 +71,41 @@ INPUT, e -> ..., 256)` — which names the mailbox for the probe: a named mailbo
 producer commits declared mutations, consumers read coherent immutable versions (lock-free), react
 per version, or block until a newer one exists, with bounded history. The version number and named
 commit commands are the replication hooks the bridge builds on.
+
+## Many components, one order: the tick
+
+A `Pump` drains one consumer. A `Tick` drains a set of them that must agree on order: each component has an
+`Inbox` holding every topic it subscribes to in one queue, and a run delivers to all of them in **rounds** until
+nothing is left or a deadline passes.
+
+```java
+Topic<Title> TITLE = Topic.state("tab.title", Title.class, Title::id); // what is true now: last write per key wins
+Topic<Save>  SAVE  = Topic.edge("editor.save", Save.class);            // what happened: every one, in order
+
+Tick tick = bus.tick(loop::wake);                // the hook runs when a message arrives from outside a tick
+Inbox editor = tick.inbox("editor");
+Sender<Title> retitle = editor.sender(TITLE);    // a send inside a delivery belongs to the round
+editor.subscribe(SAVE, s -> retitle.send(new Title(s.id(), s.name())), 64);
+
+tick.run(deadline);                              // on the thread that owns the tick, once per frame or so
+```
+
+- **Arrival.** A message published from outside a tick is staged and enters at the start of the next one, never
+  in the middle.
+- **Rounds.** What a component sends during a round reaches other inboxes in the next round, so it is delivered in
+  the same tick. At the end of a round, outboxes are emptied in the order the inboxes were made. That makes the
+  order the same whether lanes (`Tick.Lanes`) run a round on one thread or on several.
+- **State and edges.** A topic declares its kind. A state message replaces the queued write to its key; an edge
+  is never dropped, and an edge mailbox that overflows is a fault, as `FAIL` is. Two declarations of one channel
+  that disagree about its kind are refused.
+- **Deadline and loops.** The deadline is checked between rounds; what is left carries over, in order, ahead of new
+  arrivals. A chain of sends longer than the tick's hop limit is a `TickLoop` fault, counted per message so that a
+  deadline cannot hide it.
+- **Outside the tick.** A `Pump` or an inline subscriber receives a tick's sends when the tick ends, together and
+  in order.
+
+vexelray-framework builds its components on this. Its `docs/threading.md` §0 and §5 are the rules, and
+`TickTest` holds each one.
 
 ## Crossing the wire with the bridge
 

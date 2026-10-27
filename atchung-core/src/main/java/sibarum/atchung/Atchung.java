@@ -41,7 +41,9 @@ public final class Atchung {
     /**
      * Each topic's registrations, as an array that is never changed: registering or unregistering swaps in a new one. A
      * publish reads it once and walks a snapshot by index, so it neither allocates an iterator nor sees a registration
-     * set that changed under it, and a topic with nobody left on it has no entry at all.
+     * set that changed under it — the snapshot a {@code CopyOnWriteArrayList}'s iterator gave, without the iterator.
+     * A topic whose last subscriber has gone keeps an empty array, as the list it replaced stayed empty: a publish to
+     * it is a delivery to nobody, not the no-subscriber count, exactly as before.
      */
     private final ConcurrentMap<Topic<?>, Reg<?>[]> registry = new ConcurrentHashMap<>();
 
@@ -160,15 +162,6 @@ public final class Atchung {
     <T> Subscription register(Reg<T> reg) {
         registry.compute(reg.topic(), (topic, regs) -> {
             Reg<?>[] now = regs == null ? NONE : regs;
-            // Two declarations of one channel that disagree about its kind would have one subscriber folding what
-            // another treats as edges, which is the channel with no correct policy. Refused at the second
-            // subscription, where both declarations are in hand. Checked against one existing registration: every one
-            // of them passed this.
-            if (now.length > 0 && now[0].topic().kind() != reg.topic().kind()) {
-                throw new IllegalStateException("topic '" + reg.topic().name() + "' is declared as "
-                        + reg.topic().kind() + " here and as " + now[0].topic().kind() + " by an existing "
-                        + "subscriber: a channel carries one kind, so every declaration of it must say the same one");
-            }
             Reg<?>[] next = Arrays.copyOf(now, now.length + 1);
             next[now.length] = reg;
             return next;
@@ -186,7 +179,7 @@ public final class Atchung {
             for (int i = 0; i < regs.length; i++) {
                 if (regs[i] == reg) {
                     if (regs.length == 1) {
-                        return null;
+                        return NONE;   // kept, empty: see the registry's javadoc
                     }
                     Reg<?>[] next = new Reg<?>[regs.length - 1];
                     System.arraycopy(regs, 0, next, 0, i);

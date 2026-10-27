@@ -97,6 +97,19 @@ public final class Inbox {
             throw new IllegalArgumentException("topic '" + topic.name() + "' is an edge, and only a state topic has "
                     + "keys to filter by");
         }
+        // Two inboxes hearing one channel as two kinds would have one folding what the other treats as edges, which is
+        // the channel with no correct policy. Only inboxes are compared: a Pump or an inline subscriber on the same
+        // channel chooses its own policy, as it always has, and is neither checked nor refused here.
+        Atchung.Reg<?>[] existing = tick.bus.registered(topic);
+        if (existing != null) {
+            for (Atchung.Reg<?> r : existing) {
+                if (r instanceof TickReg<?> t && t.topic().kind() != topic.kind()) {
+                    throw new IllegalStateException("topic '" + topic.name() + "' is heard as " + topic.kind()
+                            + " here and as " + t.topic().kind() + " by inbox '" + t.inbox.name + "': a channel "
+                            + "carries one kind, so every inbox's declaration of it must say the same one");
+                }
+            }
+        }
         TickReg<T> reg = new TickReg<>(this, topic, subscriber, capacity, keys == null ? null : Set.copyOf(keys));
         Subscription busSub = tick.bus.register(reg);
         return new Subscription() {

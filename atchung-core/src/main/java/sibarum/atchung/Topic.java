@@ -24,10 +24,10 @@ import java.util.Objects;
  *       component's state between two of its deliveries.</li>
  * </ul>
  *
- * <p>The kind is not part of equality. Two declarations of one channel that disagree about its kind are a bug,
- * and keeping them equal is what lets the bus see both and refuse the second ({@link Atchung} does, when the second
- * subscribes), rather than quietly treating them as two channels. A {@link Pump} and an inline or async
- * subscription ignore the kind, as they always have: they choose their policy per subscription.
+ * <p>The kind is not part of equality, so two declarations of one channel stay one channel. Only a {@link Tick} reads
+ * the kind, and an {@link Inbox} refuses to subscribe to a channel that another inbox already hears as the other kind.
+ * Everything that existed before ticks ignores it: a {@link Pump}, an inline and an async subscription choose their
+ * policy per subscription, exactly as they always have, and subscribing one never fails over a kind.
  *
  * @param <T> the event type
  */
@@ -137,8 +137,12 @@ public final class Topic<T> {
         return 31 * name.hashCode() + payloadType.hashCode();
     }
 
+    /**
+     * As the record this class was until 1.4 printed itself, {@code Topic[name=..., payloadType=...]}, so a log or a
+     * test that reads it reads the same thing. A state topic, which did not exist before, adds its kind at the end.
+     */
     @Override
     public String toString() {
-        return "Topic[" + name + ", " + payloadType.getName() + (kind == Kind.STATE ? ", state]" : "]");
+        return "Topic[name=" + name + ", payloadType=" + payloadType + (kind == Kind.STATE ? ", kind=STATE]" : "]");
     }
 }

@@ -271,10 +271,17 @@ class TickTest {
         Topic<Title> asEdge = Topic.of("test.title", Title.class);
         assertEquals(TITLE, asEdge, "the kind is not part of equality, so the bus sees both declarations");
 
-        bus.tick(null).inbox("one").subscribe(TITLE, t -> { }, 1);
+        Tick tick = bus.tick(null);
+        tick.inbox("one").subscribe(TITLE, t -> { }, 1);
+        Inbox two = tick.inbox("two");
         IllegalStateException refused = assertThrows(IllegalStateException.class,
-                () -> bus.subscribe(asEdge, t -> { }));
+                () -> two.subscribe(asEdge, t -> { }, 1));
         assertTrue(refused.getMessage().contains("test.title"));
+
+        bus.subscribe(asEdge, t -> { });
+        bus.pump().subscribe(asEdge, t -> { }, 4);
+        assertEquals(3, bus.subscriberCount(TITLE),
+                "a subscriber that is not an inbox chooses its own policy, as it always has, and is never refused");
     }
 
     // ------------------------------------------------------------------------------------------- the deadline
@@ -419,6 +426,62 @@ class TickTest {
 
         assertEquals(List.of(0), queuedDuringTheTick, "nothing outside the tick sees a send before the tick ends");
         assertEquals(List.of("one x", "two x"), drawn, "and then it sees all of them, in the order they were sent");
+    }
+
+    /**
+     * The torn frame, made to happen if it can: a logic tick writes a set of values every run, and another tick on
+     * another thread (a frame's) runs as fast as it can. If the hand-over between them were a message at a time, some
+     * frame would see part of a set. It must see every set whole.
+     */
+    @Test
+    void anotherTickReceivesEachTickOfSendsWholeNeverPartOfOne() throws Exception {
+        Atchung bus = Atchung.create();
+        Topic<Integer> writes = Topic.of("test.writes", Integer.class);
+        int perTick = 32;
+        int ticks = 2_000;
+
+        Tick logic = bus.tick(null);
+        Inbox model = logic.inbox("model");
+        Sender<Integer> write = model.sender(writes);
+        model.subscribe(A, s -> {
+            int tickNo = Integer.parseInt(s);
+            for (int i = 0; i < perTick; i++) {
+                write.send(tickNo);
+            }
+        }, 16);
+
+        Tick frame = bus.tick(null);
+        int[] counts = new int[ticks];
+        frame.inbox("view").subscribe(writes, v -> counts[v]++, perTick * ticks);
+
+        java.util.concurrent.atomic.AtomicBoolean done = new java.util.concurrent.atomic.AtomicBoolean();
+        List<String> torn = java.util.Collections.synchronizedList(new ArrayList<>());
+        Thread frames = new Thread(() -> {
+            while (!done.get() || frame.hasPending()) {
+                java.util.Arrays.fill(counts, 0);
+                frame.run(LATER);
+                for (int t = 0; t < ticks; t++) {
+                    if (counts[t] != 0 && counts[t] != perTick) {
+                        torn.add("tick " + t + ": " + counts[t] + " of " + perTick);
+                    }
+                }
+            }
+        }, "frames");
+        frames.start();
+        for (int t = 0; t < ticks; t++) {
+            bus.publish(A, Integer.toString(t));
+            logic.run(LATER);
+        }
+        done.set(true);
+        frames.join(30_000);
+
+        assertEquals(List.of(), torn, "a frame never runs on part of a tick's writes");
+    }
+
+    @Test
+    void aTopicPrintsItselfAsTheRecordItWas() {
+        assertEquals("Topic[name=test.a, payloadType=class java.lang.String]", A.toString(),
+                "atchung 1.3's Topic was a record, and anything that read its toString reads the same text");
     }
 
     @Test

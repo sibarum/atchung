@@ -30,8 +30,10 @@ import sibarum.probe.Zone;
  *       not into anybody's inbox.</li>
  *   <li><b>The end of a round.</b> Outboxes are emptied in the order the inboxes were made, each in the order its
  *       component sent. A message for an inbox of this tick is queued there for the next round; a message for any
- *       other subscriber (a {@link Pump}, an inline or async subscriber, another tick) is held and handed over when
- *       the tick ends, in the same order, so they see a tick's sends together and never half of one.</li>
+ *       other subscriber is held and handed over when the tick ends, in the same order. <b>Another tick receives a
+ *       tick's share in one step</b>, so it runs on all of one tick's sends or none of them: that is what keeps a
+ *       frame from drawing half of what the logic wrote. A {@link Pump}, an inline or an async subscriber is handed
+ *       its messages one at a time, as a publish would, and behaves exactly as it always has.</li>
  *   <li><b>The end of a tick.</b> When a round leaves nothing queued, or the deadline has passed, the tick is over.
  *       A delivery is never interrupted: the deadline is checked between rounds. What is still queued stays queued,
  *       ahead of whatever is staged by the next tick, so carrying over keeps the order.</li>
@@ -382,13 +384,28 @@ public final class Tick {
         out++;
     }
 
-    /** Hand this tick's sends to the subscribers outside it, in the order they were sent, each in its own cause. */
+    /**
+     * Hand this tick's sends to the subscribers outside it, in the order they were sent, each in its own cause.
+     *
+     * <p><b>Another tick gets all of this tick's sends at once, or none of them.</b> Its share is staged in one step,
+     * under its lock, so its next run takes the whole of this tick or waits for the next: a frame drained by a tick
+     * can never show half of what one logic tick wrote. A {@link Pump}, an inline or an async subscriber is handed
+     * its messages one at a time, exactly as a publish would.
+     */
     private void handOver() {
         int n = out;
         out = 0;
         long coordinator = Cause.current();
         try {
             for (int i = 0; i < n; i++) {
+                if (outRegs[i] instanceof TickReg<?> t) {
+                    t.inbox.tick.stageShare(outRegs, outEvents, outCauses, n);
+                }
+            }
+            for (int i = 0; i < n; i++) {
+                if (outRegs[i] == null) {
+                    continue;   // staged into another tick, with the rest of that tick's share
+                }
                 Cause.enter(outCauses[i]);
                 deliverOut(outRegs[i], outEvents[i]);
             }
@@ -409,25 +426,53 @@ public final class Tick {
     /** A message from outside a tick, for {@code reg}: staged for the next one. On the publisher's thread. */
     <T> void stage(TickReg<T> reg, T event, long cause) {
         synchronized (lock) {
-            if (staged == STAGING_LIMIT) {
-                MailboxOverflow overflow = new MailboxOverflow(reg.topic(), STAGING_LIMIT, reg.delivered,
-                        reg.subscribedMillis, reg.lastDeliveredMillis);
-                Atchung.fatal().fault(overflow);
-                throw overflow;
-            }
-            if (staged == stagedRegs.length) {
-                stagedRegs = java.util.Arrays.copyOf(stagedRegs, staged * 2);
-                stagedEvents = java.util.Arrays.copyOf(stagedEvents, staged * 2);
-                stagedCauses = java.util.Arrays.copyOf(stagedCauses, staged * 2);
-            }
-            stagedRegs[staged] = reg;
-            stagedEvents[staged] = event;
-            stagedCauses[staged] = cause;
-            staged++;
+            stageLocked(reg, event, cause);
         }
         // Outside the lock, as Pump's arrival is: what it wakes may take the lock to ask what is staged.
         if (arrival != null) {
             arrival.run();
         }
+    }
+
+    /**
+     * Stage every message among the first {@code n} of {@code regs} that is for an inbox of this tick, in order and in
+     * one step, and clear each one staged out of {@code regs}. Called by another tick handing over; see
+     * {@link #handOver}. A paused subscription is skipped, as {@code deliver} skips it: pausing is lossy.
+     */
+    void stageShare(Atchung.Reg<?>[] regs, Object[] events, long[] causes, int n) {
+        boolean any = false;
+        synchronized (lock) {
+            for (int i = 0; i < n; i++) {
+                if (regs[i] instanceof TickReg<?> t && t.inbox.tick == this) {
+                    if (!t.isPaused()) {
+                        stageLocked(t, events[i], causes[i]);
+                        any = true;
+                    }
+                    regs[i] = null;
+                }
+            }
+        }
+        if (any && arrival != null) {
+            arrival.run();
+        }
+    }
+
+    /** Stage one message. Caller holds the lock. */
+    private void stageLocked(TickReg<?> reg, Object event, long cause) {
+        if (staged == STAGING_LIMIT) {
+            MailboxOverflow overflow = new MailboxOverflow(reg.topic(), STAGING_LIMIT, reg.delivered,
+                    reg.subscribedMillis, reg.lastDeliveredMillis);
+            Atchung.fatal().fault(overflow);
+            throw overflow;
+        }
+        if (staged == stagedRegs.length) {
+            stagedRegs = java.util.Arrays.copyOf(stagedRegs, staged * 2);
+            stagedEvents = java.util.Arrays.copyOf(stagedEvents, staged * 2);
+            stagedCauses = java.util.Arrays.copyOf(stagedCauses, staged * 2);
+        }
+        stagedRegs[staged] = reg;
+        stagedEvents[staged] = event;
+        stagedCauses[staged] = cause;
+        staged++;
     }
 }

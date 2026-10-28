@@ -35,10 +35,22 @@ class ChainTest {
     record Closed() {
     }
 
-    record Answer(boolean save) {
+    interface Answer {
     }
 
-    record View(int clicks) {
+    record Save() implements Answer {
+    }
+
+    record DontSave() implements Answer {
+    }
+
+    record Cancel() implements Answer {
+    }
+
+    record View(int clicks, int closings) {
+        View(int clicks) {
+            this(clicks, 0);
+        }
     }
 
     record Doc(boolean dirty, boolean open, boolean saved) {
@@ -90,8 +102,9 @@ class ChainTest {
             closeClicked = vb.step("closeClicked", (v, click, out) -> {
                 runs.add(out.run());
                 out.result(new CloseAsked());
-                return new View(v.clicks() + 1);
+                return new View(v.clicks() + 1, v.closings());
             });
+            Step<View, Closed> closed = vb.step("closed", (v, c, out) -> new View(v.clicks(), v.closings() + 1));
             view = vb.build(tick.inbox("view"), "test.view", 16);
 
             Ledger.Builder<Doc> eb = Ledger.of(new Doc(dirty, true, false));
@@ -104,9 +117,15 @@ class ChainTest {
                 out.result(new Closed());
                 return d.closed(false);
             });
-            Step<Doc, Answer> finishClose = eb.step("finishClose", (d, answer, out) -> {
+            Step<Doc, Save> saveAndClose = eb.step("saveAndClose", (d, save, out) -> {
                 runs.add(out.run());
-                return d.closed(answer.save());
+                out.result(new Closed());
+                return d.closed(true);
+            });
+            Step<Doc, DontSave> discardAndClose = eb.step("discardAndClose", (d, dont, out) -> {
+                runs.add(out.run());
+                out.result(new Closed());
+                return d.closed(false);
             });
             editor = eb.build(tick.inbox("editor"), "test.editor", 16);
 
@@ -125,7 +144,9 @@ class ChainTest {
             chain = Chain.start("close", view, closeClicked)
                     .then(CloseAsked.class, editor, closeRequested)
                     .then(PromptToSave.class, dialogs, askSave)
-                    .then(Answer.class, editor, finishClose)
+                    .then(Save.class, editor, saveAndClose)
+                    .or(DontSave.class, editor, discardAndClose)
+                    .then(Closed.class, view, closed)
                     .build();
         }
 
@@ -167,7 +188,7 @@ class ChainTest {
         assertEquals(List.of("save?"), c.shown);
         assertTrue(c.editor.state().value().open(), "nothing closes while the person decides");
 
-        c.bus.publish(c.dialogs.topic(), c.answered.with(new Answer(true)));
+        c.bus.publish(c.dialogs.topic(), c.answered.with(new Save()));
         c.tick.run(later());
 
         assertEquals(new Doc(false, false, true), c.editor.state().value());
@@ -175,11 +196,102 @@ class ChainTest {
     }
 
     @Test
+    void eachAnswerTakesItsOwnBranchAndTheBranchesJoin() {
+        Close saved = new Close(true);
+        saved.click();
+        saved.bus.publish(saved.dialogs.topic(), saved.answered.with(new Save()));
+        saved.tick.run(later());
+
+        Close discarded = new Close(true);
+        discarded.click();
+        discarded.bus.publish(discarded.dialogs.topic(), discarded.answered.with(new DontSave()));
+        discarded.tick.run(later());
+
+        assertTrue(saved.editor.state().value().saved());
+        assertEquals(new Doc(false, false, false), discarded.editor.state().value());
+        assertEquals(1, saved.view.state().value().closings(), "Save's branch went on to the link after it");
+        assertEquals(1, discarded.view.state().value().closings(), "and so did Don't save's");
+    }
+
+    @Test
+    void anAnswerNoAlternativeTakesEndsTheRun() {
+        Close c = new Close(true);
+
+        c.click();
+        c.bus.publish(c.dialogs.topic(), c.answered.with(new Cancel()));
+        c.tick.run(later());
+
+        assertEquals(new Doc(true, true, false), c.editor.state().value(), "Cancel closes nothing");
+        assertEquals(0, c.view.state().value().closings());
+        assertNull(c.dialogs.state().value().waiting(), "the prompt is answered all the same");
+    }
+
+    @Test
+    void theFirstAlternativeThatTakesTheOutcomeRunsAsACatchDoes() {
+        Atchung bus = Atchung.create();
+        Tick tick = bus.tick(null);
+        Ledger.Builder<View> sb = Ledger.of(new View(0));
+        Step<View, Answer> start = sb.step("start", (v, a, out) -> {
+            out.result(a);
+            return v;
+        });
+        Ledger<View> source = sb.build(tick.inbox("source"), "test.source", 16);
+        Ledger.Builder<Doc> tb = Ledger.of(new Doc(true, true, false));
+        Step<Doc, Save> save = tb.step("save", (d, s, out) -> d.closed(true));
+        Step<Doc, Answer> any = tb.step("any", (d, a, out) -> d.closed(false));
+        Ledger<Doc> target = tb.build(tick.inbox("target"), "test.target", 16);
+        Chain<View, Answer> chain = Chain.start("catch", source, start)
+                .then(Save.class, target, save)
+                .or(Answer.class, target, any)
+                .build();
+
+        bus.publish(chain.topic(), chain.with(new Save()));
+        tick.run(later());
+        assertTrue(target.state().value().saved(), "Save is declared first, so Save takes it");
+
+        bus.publish(chain.topic(), chain.with(new Cancel()));
+        tick.run(later());
+        assertEquals(new Doc(false, false, false), target.state().value(), "anything else falls to Answer");
+    }
+
+    @Test
+    void anAlternativeAnEarlierOneAlreadyTakesIsRefused() {
+        Tick tick = Atchung.create().tick(null);
+        Ledger.Builder<View> sb = Ledger.of(new View(0));
+        Step<View, Answer> start = sb.step("start", (v, a, out) -> v);
+        Ledger<View> source = sb.build(tick.inbox("source"), "test.source", 16);
+        Ledger.Builder<Doc> tb = Ledger.of(new Doc(true, true, false));
+        Step<Doc, Answer> any = tb.step("any", (d, a, out) -> d);
+        Step<Doc, Save> save = tb.step("save", (d, s, out) -> d);
+        Ledger<Doc> target = tb.build(tick.inbox("target"), "test.target", 16);
+        Chain.Builder<View, Answer> b = Chain.start("unreachable", source, start).then(Answer.class, target, any);
+
+        IllegalArgumentException thrown = assertThrows(IllegalArgumentException.class,
+                () -> b.or(Save.class, target, save));
+        assertEquals("chain 'unreachable': step 'save' takes Save, which step 'any' before it in the same link already "
+                + "takes as Answer, so it could never run", thrown.getMessage());
+    }
+
+    @Test
+    void orNeedsALinkToAddTo() {
+        Tick tick = Atchung.create().tick(null);
+        Ledger.Builder<View> sb = Ledger.of(new View(0));
+        Step<View, Answer> start = sb.step("start", (v, a, out) -> v);
+        Step<View, Save> other = sb.step("other", (v, s, out) -> v);
+        Ledger<View> source = sb.build(tick.inbox("source"), "test.source", 16);
+        Chain.Builder<View, Answer> b = Chain.start("first", source, start);
+
+        IllegalStateException thrown = assertThrows(IllegalStateException.class, () -> b.or(Save.class, source, other));
+        assertEquals("chain 'first': or(...) adds to a link made by then(...); a run's first step is the one it starts "
+                + "with", thrown.getMessage());
+    }
+
+    @Test
     void everyStepOfARunHasItsIdAndEachRunItsOwn() {
         Close c = new Close(true);
 
         c.click();
-        c.bus.publish(c.dialogs.topic(), c.answered.with(new Answer(false)));
+        c.bus.publish(c.dialogs.topic(), c.answered.with(new DontSave()));
         c.tick.run(later());
         c.click();
 

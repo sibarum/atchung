@@ -133,12 +133,16 @@ gives as its outcome (`out.result`) is the next one's arguments, if it is the ty
 Chain<View, Click> close = Chain.start("close", view, closeClicked)     // gives CloseAsked
         .then(CloseAsked.class,   editor,  closeRequested)              // gives PromptToSave, or Closed (the end)
         .then(PromptToSave.class, dialogs, askSave)                     // out.hold(): waits for the person
-        .then(Answer.class,       editor,  finishClose)                 // after a later step's out.resume(...)
+        .then(Save.class,         editor,  saveAndClose)                // after a later step's out.resume(...)
+        .or(DontSave.class,       editor,  discardAndClose)             // Cancel: no alternative takes it, the end
+        .then(Closed.class,       view,    closed)                      // both branches join here
         .build();
 bus.publish(close.topic(), close.with(click));
 ```
 
-Going on is a send in the step's outbox, so a step that throws takes it back too. A step never waits: it holds the
+A link's alternatives are tried in the order they were declared, as `catch` clauses are, and one an earlier
+alternative already covers is refused when the chain is built. Going on is a send in the step's outbox, so a step
+that throws takes it back too. A step never waits: it holds the
 run and keeps the `Chain.Resume` in its state, and a later step resumes it. Every run has one id (`out.run()`) through
 all its steps. `ChainTest` holds this, on the plan's witness, closing a dirty document.
 

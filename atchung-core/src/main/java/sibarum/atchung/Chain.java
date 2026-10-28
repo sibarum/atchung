@@ -9,14 +9,16 @@ import sibarum.probe.Lane;
 import sibarum.probe.Probe;
 
 /**
- * The path from a cause to its outcome, written once: a sequence of {@link Step steps}, each on its own
+ * The path from a cause to its outcome, written once: a sequence of links, each a {@link Step} on its own
  * {@link Ledger}, where what one step gives as its outcome is the arguments of the next.
  *
  * <pre>{@code
  * Chain<ViewState, Click> close = Chain.start("close", view, closeClicked)      // → CloseAsked
  *         .then(CloseAsked.class,   editor,  closeRequested)                    // → PromptToSave, or Closed
  *         .then(PromptToSave.class, dialogs, askSave)                           // holds until the person answers
- *         .then(Answer.class,       editor,  finishClose)
+ *         .then(Save.class,         editor,  saveAndClose)                      // → Closed
+ *         .or(DontSave.class,       editor,  discardAndClose)                   // → Closed; Cancel ends the run
+ *         .then(Closed.class,       view,    closed)
  *         .build();
  * bus.publish(close.topic(), close.with(click));
  * }</pre>
@@ -24,8 +26,13 @@ import sibarum.probe.Probe;
  * <ul>
  *   <li><b>A step gives its outcome</b> through its {@link Out} ({@link Out#result}), since what it returns is its
  *       ledger's next state. A step that gives none ends the run.</li>
- *   <li><b>The outcome's type picks whether the run goes on.</b> Each link after the first names the type it takes; an
- *       outcome of any other type ends the run there. So {@code Closed} above ends a close that needed no prompt.</li>
+ *   <li><b>The outcome's type picks the next step.</b> Each link after the first names the type it takes, and may have
+ *       alternatives ({@link Builder#or}). An outcome is matched against a link's alternatives in the order they were
+ *       declared, as a {@code catch} is, and the first it is an instance of runs. An outcome none of them takes ends
+ *       the run there: {@code Closed} above ends a close that needed no prompt, and {@code Cancel} one the person
+ *       called off.</li>
+ *   <li><b>Branches join again.</b> Whichever alternative ran, its outcome goes on to the next link. A branch that
+ *       should end there gives no outcome, or one the next link does not take.</li>
  *   <li><b>Going on is a send</b>, held in the owner's outbox with the step's other sends: the next step runs on its
  *       own ledger in a later round, and a step that throws takes its outcome back with everything else. Each step is
  *       atomic on its own ledger; the run as a whole is not, and other transactions run on each ledger between steps.</li>
@@ -47,20 +54,26 @@ public final class Chain<T, A> {
     private static final AtomicLong RUNS = new AtomicLong();
 
     private final String name;
-    private final Link[] links;
+    /** Each link's alternatives, in the order they were declared. The first link has one, which takes anything. */
+    private final Alternative[][] links;
     private final Ledger<T> first;
     private final String stepName; // the probe's mark for a step taken, built once
 
-    private Chain(String name, Ledger<T> first, List<Link> links) {
+    private Chain(String name, Ledger<T> first, List<List<Alternative>> links) {
         this.name = name;
         this.first = first;
-        this.links = links.toArray(new Link[0]);
+        this.links = new Alternative[links.size()][];
+        for (int i = 0; i < this.links.length; i++) {
+            this.links[i] = links.get(i).toArray(new Alternative[0]);
+        }
         this.stepName = Probe.ON ? "chain " + name : null;
     }
 
     /** Begin a chain whose runs start with {@code step} on {@code ledger}. */
     public static <T, A> Builder<T, A> start(String name, Ledger<T> ledger, Step<T, A> step) {
-        return new Builder<T, A>(Objects.requireNonNull(name, "name")).link(null, ledger, step);
+        Builder<T, A> b = new Builder<>(Objects.requireNonNull(name, "name"));
+        b.links.add(new ArrayList<>());
+        return b.alternative(Object.class, ledger, step);
     }
 
     /** This chain's name, for logs and traces. */
@@ -76,32 +89,36 @@ public final class Chain<T, A> {
     /** A new run, starting with {@code args}: the message that, sent to {@link #topic()}, starts it. */
     @SuppressWarnings("unchecked")
     public Step.Transaction<T> with(A args) {
-        Step<T, ?> step = (Step<T, ?>) links[0].step;
+        Step<T, ?> step = (Step<T, ?>) links[0][0].step;
         return new Step.Transaction<>(step, args, new Run(this, RUNS.incrementAndGet(), 0));
     }
 
     /**
-     * Carry {@code run} on with {@code outcome}, from the step at its position: post the next step into
-     * {@code owner}'s outbox, or end the run if there is none or the outcome is not its type.
+     * Carry {@code run} on with {@code outcome}, from the step at its position: post the first of the next link's
+     * alternatives that takes it into {@code owner}'s outbox, or end the run if there is no next link or none takes it.
      */
     void advance(Run run, Object outcome, Inbox owner) {
         int next = run.position() + 1;
-        if (next >= links.length || !links[next].on.isInstance(outcome)) {
-            if (Probe.ON) {
-                Probe.mark(Lane.BUS, stepName, "ends", run.id());
+        if (next < links.length) {
+            for (Alternative alt : links[next]) {
+                if (alt.on.isInstance(outcome)) {
+                    if (Probe.ON) {
+                        Probe.mark(Lane.BUS, stepName, alt.step.name(), run.id());
+                    }
+                    owner.post(alt.ledger.topic(),
+                            new Step.Transaction<>(alt.step, outcome, new Run(this, run.id(), next)));
+                    return;
+                }
             }
-            return;
         }
-        Link link = links[next];
         if (Probe.ON) {
-            Probe.mark(Lane.BUS, stepName, link.step.name(), run.id());
+            Probe.mark(Lane.BUS, stepName, "ends", run.id());
         }
-        owner.post(link.ledger.topic(), new Step.Transaction<>(link.step, outcome, new Run(this, run.id(), next)));
     }
 
     @Override
     public String toString() {
-        return "Chain[" + name + ", " + links.length + " steps]";
+        return "Chain[" + name + ", " + links.length + " links]";
     }
 
     /** Where a transaction stands in a run: which chain, which run, which link. */
@@ -127,18 +144,18 @@ public final class Chain<T, A> {
 
         @Override
         public String toString() {
-            return "Resume[" + run.chain().name + " run " + run.id() + " after step " + run.position() + "]";
+            return "Resume[" + run.chain().name + " run " + run.id() + " after link " + run.position() + "]";
         }
     }
 
-    private record Link(Class<?> on, Ledger<?> ledger, Step<?, ?> step) {
+    private record Alternative(Class<?> on, Ledger<?> ledger, Step<?, ?> step) {
     }
 
     // --- Builder ----------------------------------------------------------
 
     public static final class Builder<T, A> {
         private final String name;
-        private final List<Link> links = new ArrayList<>();
+        private final List<List<Alternative>> links = new ArrayList<>();
         private Ledger<T> first;
 
         private Builder(String name) {
@@ -146,27 +163,52 @@ public final class Chain<T, A> {
         }
 
         /**
-         * Then, when the previous step's outcome is an {@code on}, run {@code step} on {@code ledger} with it. An
-         * outcome of another type ends the run.
+         * Then, when the previous step's outcome is an {@code on}, run {@code step} on {@code ledger} with it: a new
+         * link. An outcome this link does not take ends the run.
          *
          * @throws IllegalArgumentException if {@code step} is not declared on {@code ledger}
          */
         public <U, E> Builder<T, A> then(Class<E> on, Ledger<U> ledger, Step<U, ? super E> step) {
-            return link(Objects.requireNonNull(on, "on"), ledger, step);
+            links.add(new ArrayList<>());
+            return alternative(Objects.requireNonNull(on, "on"), ledger, step);
+        }
+
+        /**
+         * Or, when it is an {@code on} instead, run {@code step} on {@code ledger} with it: an alternative in the last
+         * link, tried after the ones declared before it.
+         *
+         * @throws IllegalStateException    if there is no link to add to: a run's first step is the one it starts with
+         * @throws IllegalArgumentException if {@code step} is not declared on {@code ledger}, or an earlier alternative
+         *                                  in this link already takes every {@code on}, so this one could never run
+         */
+        public <U, E> Builder<T, A> or(Class<E> on, Ledger<U> ledger, Step<U, ? super E> step) {
+            if (links.size() < 2) {
+                throw new IllegalStateException("chain '" + name + "': or(...) adds to a link made by then(...); a "
+                        + "run's first step is the one it starts with");
+            }
+            return alternative(Objects.requireNonNull(on, "on"), ledger, step);
         }
 
         @SuppressWarnings("unchecked")
-        private Builder<T, A> link(Class<?> on, Ledger<?> ledger, Step<?, ?> step) {
+        private Builder<T, A> alternative(Class<?> on, Ledger<?> ledger, Step<?, ?> step) {
             Objects.requireNonNull(ledger, "ledger");
             Objects.requireNonNull(step, "step");
             if (!ledger.declares(step)) {
                 throw new IllegalArgumentException("chain '" + name + "': step '" + step.name()
                         + "' is not declared on the ledger at '" + ledger.topic().name() + "'");
             }
+            List<Alternative> link = links.get(links.size() - 1);
+            for (Alternative earlier : link) {
+                if (earlier.on.isAssignableFrom(on)) {
+                    throw new IllegalArgumentException("chain '" + name + "': step '" + step.name() + "' takes "
+                            + on.getSimpleName() + ", which step '" + earlier.step.name() + "' before it in the same "
+                            + "link already takes as " + earlier.on.getSimpleName() + ", so it could never run");
+                }
+            }
             if (first == null) {
                 first = (Ledger<T>) ledger;
             }
-            links.add(new Link(on, ledger, step));
+            link.add(new Alternative(on, ledger, step));
             return this;
         }
 

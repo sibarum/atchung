@@ -310,6 +310,50 @@ public final class Inbox {
         outSize = mark;
     }
 
+    /**
+     * Work the coordinator does between rounds, when no lane is delivering: what changes several {@link Ledger}s at
+     * once, all or nothing, as {@link Undo} does. Queued by a step through its {@link Out}, run after the round and
+     * before the outboxes are emptied.
+     */
+    interface Between {
+        void run(Inbox from);
+    }
+
+    Between[] between = new Between[4];
+    int betweenSize;
+
+    void queueBetween(Between work) {
+        if (betweenSize == between.length) {
+            between = Arrays.copyOf(between, betweenSize * 2);
+        }
+        between[betweenSize++] = work;
+    }
+
+    /** Take back what was queued since {@code mark}: a step that threw. */
+    void discardBetweenFrom(int mark) {
+        for (int i = mark; i < betweenSize; i++) {
+            between[i] = null;
+        }
+        betweenSize = mark;
+    }
+
+    /** Run what was queued, in order, on the coordinator. @return the first throw, or null */
+    Throwable runBetween() {
+        Throwable first = null;
+        for (int i = 0; i < betweenSize; i++) {
+            try {
+                between[i].run(this);
+            } catch (RuntimeException | Error t) {
+                if (first == null) {
+                    first = t;
+                }
+            }
+            between[i] = null;
+        }
+        betweenSize = 0;
+        return first;
+    }
+
     @Override
     public String toString() {
         return "Inbox[" + name + ", lane " + lane + "]";

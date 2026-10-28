@@ -146,6 +146,14 @@ that throws takes it back too. A step never waits: it holds the
 run and keeps the `Chain.Resume` in its state, and a later step resumes it. Every run has one id (`out.run()`) through
 all its steps. `ChainTest` holds this, on the plan's witness, closing a dirty document.
 
+**Undo by snapshot.** A ledger built `.undoable(undo)` records each change it commits in an `Undo` history, grouped
+by the chain run that made it (a step that resumed a held run is part of it; a change in no run is a group of its
+own). `undo.undo()` and `undo.redo()` put a whole group back or forward, on every ledger it reached, by restoring
+the values before and after: nobody writes a reverse. They run on the tick's coordinator between rounds, when no step
+is running, so a group is restored on all its ledgers or on none. A ledger that no longer holds what the group left
+(compared with `equals`) makes it a conflict, and nothing moves. Each request's outcome is said on
+`undo.outcomes()`. `UndoTest` holds this.
+
 ## Crossing the wire with the bridge
 
 Declare the event as an elektro-Q `@Message` record (the codec is generated), then bridge its topic:

@@ -28,6 +28,8 @@ public final class Out {
     Object outcome;
     /** Whether the running step has given an outcome or held its run. */
     private boolean went;
+    /** The first run the running step resumed, or 0: a step that answers a held run is part of it. */
+    private long resumed;
 
     Out(Inbox owner) {
         this.owner = owner;
@@ -43,6 +45,7 @@ public final class Out {
         run = null;
         outcome = null;
         went = false;
+        resumed = 0;
     }
 
     /** Send {@code event} on {@code topic} when the round ends, unless the step sending it throws. */
@@ -91,6 +94,9 @@ public final class Out {
         Objects.requireNonNull(held, "held");
         Objects.requireNonNull(event, "event");
         check();
+        if (resumed == 0) {
+            resumed = held.run.id();
+        }
         held.run.chain().advance(held.run, event, owner);
     }
 
@@ -98,6 +104,19 @@ public final class Out {
     public long run() {
         check();
         return run == null ? 0 : run.id();
+    }
+
+    /**
+     * What the running step's change is undone with: its run, or the run it resumed, or 0 for a step on its own.
+     */
+    long group() {
+        return run != null ? run.id() : resumed;
+    }
+
+    /** Queue {@code work} for the coordinator, between this round and the next. Taken back if the step throws. */
+    void between(Inbox.Between work) {
+        check();
+        owner.queueBetween(work);
     }
 
     private void check() {

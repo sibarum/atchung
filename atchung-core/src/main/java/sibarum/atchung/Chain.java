@@ -69,6 +69,11 @@ public final class Chain<T, A> {
         this.stepName = Probe.ON ? "chain " + name : null;
     }
 
+    /** A fresh run id: a chain run's, or the group of a change made in none, so the two never collide. */
+    static long nextRunId() {
+        return RUNS.incrementAndGet();
+    }
+
     /** Begin a chain whose runs start with {@code step} on {@code ledger}. */
     public static <T, A> Builder<T, A> start(String name, Ledger<T> ledger, Step<T, A> step) {
         Builder<T, A> b = new Builder<>(Objects.requireNonNull(name, "name"));
@@ -90,7 +95,7 @@ public final class Chain<T, A> {
     @SuppressWarnings("unchecked")
     public Step.Transaction<T> with(A args) {
         Step<T, ?> step = (Step<T, ?>) links[0][0].step;
-        return new Step.Transaction<>(step, args, new Run(this, RUNS.incrementAndGet(), 0));
+        return new Step.Transaction<>(step, args, new Run(this, nextRunId(), 0));
     }
 
     /**

@@ -216,6 +216,14 @@ public final class Tick {
                     }
                     in.failure = null;
                 }
+                for (Inbox in : all) {
+                    if (in.betweenSize > 0) {
+                        Throwable t = in.runBetween();
+                        if (t != null && failure == null) {
+                            failure = t;
+                        }
+                    }
+                }
                 flush();
                 if (failure != null || !anyQueued()) {
                     break;

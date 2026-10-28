@@ -40,6 +40,8 @@ public final class Ledger<T> {
     private final Topic<Step.Transaction<T>> topic;
     private final Inbox owner;
     private final Out out;
+    /** Where this ledger's changes are recorded to be undone, or null. */
+    private final Undo undo;
 
     private Ledger(Builder<T> builder, Inbox owner, Topic<Step.Transaction<T>> topic, int capacity) {
         State.Builder<T> sb = State.of(builder.initial);
@@ -52,6 +54,7 @@ public final class Ledger<T> {
         this.topic = topic;
         this.owner = owner;
         this.out = new Out(owner);
+        this.undo = builder.undo;
         owner.subscribe(topic, this::run, capacity);
     }
 
@@ -83,7 +86,9 @@ public final class Ledger<T> {
                     + step.name());
         }
         int mark = owner.outSize;
+        int betweenMark = owner.betweenSize;
         T next;
+        long group;
         out.begin(transaction.run);
         try {
             next = step.applyTo(state.value(), transaction.args(), out);
@@ -94,13 +99,31 @@ public final class Ledger<T> {
             if (out.outcome != null) {
                 transaction.run.chain().advance(transaction.run, out.outcome, owner);
             }
+            group = out.group();
         } catch (RuntimeException | Error e) {
             owner.discardFrom(mark);
+            owner.discardBetweenFrom(betweenMark);
             throw e;
         } finally {
             out.end();
         }
-        state.commitIfChanged(replace, next);
+        if (undo == null) {
+            state.commitIfChanged(replace, next);
+            return;
+        }
+        Versioned<T> before = state.current();
+        if (state.commitIfChanged(replace, next)) {
+            undo.record(this, group == 0 ? Chain.nextRunId() : group, before, state.current(), owner);
+        }
+    }
+
+    /**
+     * Set the state to {@code value}, as undo and redo do: on the coordinator, between rounds, when no step of this
+     * ledger is running. Not recorded, since it is the record being walked.
+     */
+    @SuppressWarnings("unchecked")
+    void restore(Object value) {
+        state.commit(replace, (T) value);
     }
 
     /** Whether {@code step} was declared on this ledger's builder. */
@@ -119,6 +142,7 @@ public final class Ledger<T> {
         private final T initial;
         private final List<Step<T, ?>> steps = new ArrayList<>();
         private int maxDepth;
+        private Undo undo;
 
         private Builder(T initial) {
             this.initial = initial;
@@ -134,6 +158,15 @@ public final class Ledger<T> {
         /** Keep the last {@code maxDepth} versions, as {@link State.Builder#history(int)}. 0 (default) keeps none. */
         public Builder<T> history(int maxDepth) {
             this.maxDepth = maxDepth;
+            return this;
+        }
+
+        /**
+         * Record this ledger's changes in {@code undo}, so they can be undone: each change under the chain run it was
+         * part of, or on its own when it was in none.
+         */
+        public Builder<T> undoable(Undo undo) {
+            this.undo = Objects.requireNonNull(undo, "undo");
             return this;
         }
 

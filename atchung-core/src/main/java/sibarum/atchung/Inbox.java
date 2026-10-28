@@ -301,6 +301,15 @@ public final class Inbox {
         outSize = n + 1;
     }
 
+    /** Take back what was posted since the outbox held {@code mark} messages: a {@link Ledger}'s step that threw. */
+    void discardFrom(int mark) {
+        for (int i = mark; i < outSize; i++) {
+            outTopics[i] = null;
+            outEvents[i] = null;
+        }
+        outSize = mark;
+    }
+
     @Override
     public String toString() {
         return "Inbox[" + name + ", lane " + lane + "]";

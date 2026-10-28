@@ -25,7 +25,7 @@ delivery is opt-in and lives entirely in elektro-Q and the bridge — the bus co
 
 | Module | What it provides |
 |---|---|
-| `atchung-core` | The event bus: `Topic` (state or edge), `Atchung`, inline/async/pumped delivery, `Backpressure`, pause/resume, the `Tick` that drains many components' inboxes in one order, and the `State<T>` synchronization primitive. Pure Java, no dependencies. |
+| `atchung-core` | The event bus: `Topic` (state or edge), `Atchung`, inline/async/pumped delivery, `Backpressure`, pause/resume, the `Tick` that drains many components' inboxes in one order, the `State<T>` synchronization primitive, and the `Ledger<T>` its owner changes by declared steps. Pure Java, no dependencies. |
 | `atchung-probe` | The stack-wide profiling seam: `Probe`, `Lane`, spans, counters and a resource ledger. Off unless asked, free when off, and dependency-free so any layer can take it without taking the bus. The trace is aligned text for a person watching a run, or a correlation CSV (`probe.format=csv`) for a program reading one afterwards — `CsvView` reads that file back and hunts it for stalls. See [`docs/probe.md`](docs/probe.md). |
 | `atchung-elektroq` | `ElektroBridge` — wires an `Atchung` bus to an elektro-Q `Conduit`, both directions, with loop prevention. |
 | `elektroq/` | The cross-process stack (own aggregator; coordinates `sibarum.elektro.queue:*`). See [`elektroq/README.md`](elektroq/README.md) for the full tutorial. Modules: `elektroq-core`, `elektroq-codegen`, `elektroq-transport-tcp`, `elektroq-transport-uds`, `elektroq-transport-local`, `elektroq-netcode`, `elektroq-example`. |
@@ -106,6 +106,25 @@ tick.run(deadline);                              // on the thread that owns the 
 
 vexelray-framework builds its components on this. Its `docs/threading.md` §0 and §5 are the rules, and
 `TickTest` holds each one.
+
+**A state its owner changes: the ledger.** A `Ledger<T>` is a `State<T>` owned by one inbox and changed only by
+the steps declared on it. A change is a message, a step with its arguments, and the owner runs it:
+
+```java
+Ledger.Builder<Notes> b = Ledger.of(Notes.EMPTY);
+Step<Notes, String> add = b.step("add", (notes, line, out) -> {
+    out.send(ADDED, new Added(line));            // leaves when the round ends, and only if the step returns
+    return notes.with(line);
+});
+Ledger<Notes> notes = b.build(tick.inbox("notes"), "notes.tx", 64);
+
+bus.publish(notes.topic(), add.with("milk"));    // or a Sender for notes.topic(), from another component
+notes.state().value();                           // reads are snapshots, from any thread
+```
+
+Transactions run one at a time on the owner's lane, each on the state the last one left. A step that throws
+commits nothing and its sends are taken back. `LedgerTest` holds this, and vexelray-framework's
+`docs/plans/chains.md` is what it is for.
 
 ## Crossing the wire with the bridge
 

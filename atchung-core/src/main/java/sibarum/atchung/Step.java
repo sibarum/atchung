@@ -68,10 +68,17 @@ public final class Step<T, P> {
 
         private final Step<T, ?> step;
         private final Object args;
+        /** Where this stands in a {@link Chain}'s run, or null when it was sent on its own. */
+        final Chain.Run run;
 
         Transaction(Step<T, ?> step, Object args) {
+            this(step, args, null);
+        }
+
+        Transaction(Step<T, ?> step, Object args, Chain.Run run) {
             this.step = Objects.requireNonNull(step, "step");
             this.args = args;
+            this.run = run;
         }
 
         /** @return the step this runs. */
@@ -86,7 +93,7 @@ public final class Step<T, P> {
 
         @Override
         public String toString() {
-            return step.name + "(" + args + ")";
+            return step.name + "(" + args + ")" + (run == null ? "" : " in " + run.chain().name() + " run " + run.id());
         }
     }
 }

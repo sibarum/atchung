@@ -126,6 +126,22 @@ Transactions run one at a time on the owner's lane, each on the state the last o
 commits nothing and its sends are taken back. `LedgerTest` holds this, and vexelray-framework's
 `docs/plans/chains.md` is what it is for.
 
+**From a cause to its outcome: the chain.** A `Chain` is steps on several ledgers, written once, where what one step
+gives as its outcome (`out.result`) is the next one's arguments, if it is the type the next link takes:
+
+```java
+Chain<View, Click> close = Chain.start("close", view, closeClicked)     // gives CloseAsked
+        .then(CloseAsked.class,   editor,  closeRequested)              // gives PromptToSave, or Closed (the end)
+        .then(PromptToSave.class, dialogs, askSave)                     // out.hold(): waits for the person
+        .then(Answer.class,       editor,  finishClose)                 // after a later step's out.resume(...)
+        .build();
+bus.publish(close.topic(), close.with(click));
+```
+
+Going on is a send in the step's outbox, so a step that throws takes it back too. A step never waits: it holds the
+run and keeps the `Chain.Resume` in its state, and a later step resumes it. Every run has one id (`out.run()`) through
+all its steps. `ChainTest` holds this, on the plan's witness, closing a dirty document.
+
 ## Crossing the wire with the bridge
 
 Declare the event as an elektro-Q `@Message` record (the codec is generated), then bridge its topic:

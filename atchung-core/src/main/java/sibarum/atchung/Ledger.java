@@ -84,20 +84,28 @@ public final class Ledger<T> {
         }
         int mark = owner.outSize;
         T next;
-        out.running = Thread.currentThread();
+        out.begin(transaction.run);
         try {
             next = step.applyTo(state.value(), transaction.args(), out);
             if (next == null) {
                 throw new NullPointerException("step '" + step.name() + "' returned no state; a step that changes "
                         + "nothing returns the state it was given");
             }
+            if (out.outcome != null) {
+                transaction.run.chain().advance(transaction.run, out.outcome, owner);
+            }
         } catch (RuntimeException | Error e) {
             owner.discardFrom(mark);
             throw e;
         } finally {
-            out.running = null;
+            out.end();
         }
         state.commitIfChanged(replace, next);
+    }
+
+    /** Whether {@code step} was declared on this ledger's builder. */
+    boolean declares(Step<?, ?> step) {
+        return declared.contains(step);
     }
 
     @Override

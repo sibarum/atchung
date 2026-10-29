@@ -94,6 +94,32 @@ public final class Topic<T> {
         return new Topic<>(name, payloadType, Kind.STATE, e -> WHOLE);
     }
 
+    /**
+     * An {@link Kind#EDGE edge} topic named by its payload: the channel <em>is</em> the type, so it is declared once,
+     * beside the type, and found from it. Its name is the payload's canonical name
+     * ({@code dev.example.Messages.Open}), which no two channels share, so a spelling can never name the wrong one.
+     */
+    public static <T> Topic<T> edge(Class<T> payloadType) {
+        return edge(nameOf(payloadType), payloadType);
+    }
+
+    /** A {@link Kind#STATE state} topic named by its payload, as {@link #edge(Class)} is, whose messages each write {@code key}. */
+    public static <T> Topic<T> state(Class<T> payloadType, Key<T> key) {
+        return state(nameOf(payloadType), payloadType, key);
+    }
+
+    /** A {@link Kind#STATE state} topic named by its payload, as {@link #edge(Class)} is, that is one piece of state as a whole. */
+    public static <T> Topic<T> state(Class<T> payloadType) {
+        return state(nameOf(payloadType), payloadType);
+    }
+
+    /** The name a topic named by its payload carries: the canonical name, or the binary name of a type with none. */
+    private static String nameOf(Class<?> payloadType) {
+        Objects.requireNonNull(payloadType, "payloadType");
+        String canonical = payloadType.getCanonicalName();
+        return canonical != null ? canonical : payloadType.getName();
+    }
+
     /** The channel's stable name. */
     public String name() {
         return name;

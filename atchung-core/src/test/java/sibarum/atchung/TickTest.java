@@ -284,6 +284,37 @@ class TickTest {
                 "a subscriber that is not an inbox chooses its own policy, as it always has, and is never refused");
     }
 
+    /** A record nested here, so its canonical name has an enclosing type in it. */
+    record Renamed(String to) {
+    }
+
+    /**
+     * A topic named by its payload is named by the payload's canonical name, so two declarations of it anywhere are one
+     * channel, and a state one folds as one declared with a string does.
+     */
+    @Test
+    void aTopicNamedByItsPayloadIsThePayloadsCanonicalName() {
+        Topic<Renamed> edge = Topic.edge(Renamed.class);
+        assertEquals("sibarum.atchung.TickTest.Renamed", edge.name());
+        assertEquals(Topic.Kind.EDGE, edge.kind());
+        assertEquals(Topic.edge("sibarum.atchung.TickTest.Renamed", Renamed.class), edge);
+
+        Topic<Renamed> state = Topic.state(Renamed.class, Renamed::to);
+        assertEquals(edge, state, "the kind is not part of equality");
+        assertEquals(Topic.Kind.STATE, state.kind());
+
+        Atchung bus = Atchung.create();
+        Tick tick = bus.tick(null);
+        List<String> heard = new ArrayList<>();
+        tick.inbox("one").subscribe(state, r -> heard.add(r.to()), 1);
+        bus.publish(state, new Renamed("a"));
+        bus.publish(state, new Renamed("a"));
+        bus.publish(state, new Renamed("b"));
+        tick.run(System.nanoTime() + 1_000_000_000L);
+        assertEquals(List.of("a", "b"), heard, "the last write per key, as any state topic");
+        assertEquals(Topic.Kind.STATE, Topic.state(Renamed.class).kind());
+    }
+
     // ------------------------------------------------------------------------------------------- the deadline
 
     @Test

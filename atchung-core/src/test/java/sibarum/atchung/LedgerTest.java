@@ -198,4 +198,31 @@ class LedgerTest {
         assertEquals(List.of("clicked"), notes.state().value().lines());
         assertEquals(2, tick.lastRounds());
     }
+
+    @Test
+    void aMessageOnAHeardTopicRunsItsStepInOrderWithTransactions() {
+        Atchung bus = Atchung.create();
+        Tick tick = bus.tick(null);
+        Ledger.Builder<Notes> b = Ledger.of(new Notes(List.of()));
+        Step<Notes, String> add = b.step("add", (notes, line, out) -> notes.with(line));
+        Ledger<Notes> notes = b.on(SAID, add).build(tick.inbox("notes"), "test.notes", 16);
+
+        bus.publish(SAID, "heard");
+        bus.publish(notes.topic(), add.with("sent"));
+        bus.publish(SAID, "heard again");
+        tick.run(later());
+
+        assertEquals(List.of("heard", "sent", "heard again"), notes.state().value().lines());
+        assertEquals(3, notes.state().version());
+    }
+
+    @Test
+    void aHeardTopicNeedsAStepDeclaredOnTheSameBuilder() {
+        Ledger.Builder<Notes> other = Ledger.of(new Notes(List.of()));
+        Step<Notes, String> foreign = other.step("foreign", (notes, line, out) -> notes);
+        Ledger.Builder<Notes> b = Ledger.of(new Notes(List.of()));
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> b.on(SAID, foreign));
+        assertEquals("step 'foreign' heard on 'test.said' is not declared on this builder", e.getMessage());
+    }
 }

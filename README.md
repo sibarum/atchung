@@ -123,8 +123,10 @@ notes.state().value();                           // reads are snapshots, from an
 ```
 
 Transactions run one at a time on the owner's lane, each on the state the last one left. A step that throws
-commits nothing and its sends are taken back. `LedgerTest` holds this, and vexelray-framework's
-`docs/plans/chains.md` is what it is for.
+commits nothing and its sends are taken back. A sender that does not know the ledger, such as a job replying or a
+view reporting, publishes a plain message, and the ledger says which step it runs:
+`b.on(FILE_READ, opened)`, beside its other deliveries and in order with them. `LedgerTest` holds this, and
+vexelray-framework's `docs/plans/chains.md` is what it is for.
 
 **From a cause to its outcome: the chain.** A `Chain` is steps on several ledgers, written once, where what one step
 gives as its outcome (`out.result`) is the next one's arguments, if it is the type the next link takes:

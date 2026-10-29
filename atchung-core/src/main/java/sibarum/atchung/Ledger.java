@@ -56,6 +56,9 @@ public final class Ledger<T> {
         this.out = new Out(owner);
         this.undo = builder.undo;
         owner.subscribe(topic, this::run, capacity);
+        for (Heard<T, ?> heard : builder.heard) {
+            heard.subscribe(this, owner, capacity);
+        }
     }
 
     /** Begin building a ledger with its initial value. */
@@ -80,7 +83,11 @@ public final class Ledger<T> {
 
     /** One transaction, on the owner's lane, inside a delivery to its inbox. */
     private void run(Step.Transaction<T> transaction) {
-        Step<T, ?> step = transaction.step();
+        run(transaction.step(), transaction.args(), transaction.run);
+    }
+
+    /** One step, with its arguments and the run it is in (null for none). */
+    private void run(Step<T, ?> step, Object args, Chain.Run run) {
         if (!declared.contains(step)) {
             throw new IllegalArgumentException("step not declared on the ledger at '" + topic.name() + "': "
                     + step.name());
@@ -89,15 +96,15 @@ public final class Ledger<T> {
         int betweenMark = owner.betweenSize;
         T next;
         long group;
-        out.begin(transaction.run);
+        out.begin(run);
         try {
-            next = step.applyTo(state.value(), transaction.args(), out);
+            next = step.applyTo(state.value(), args, out);
             if (next == null) {
                 throw new NullPointerException("step '" + step.name() + "' returned no state; a step that changes "
                         + "nothing returns the state it was given");
             }
             if (out.outcome != null) {
-                transaction.run.chain().advance(transaction.run, out.outcome, owner);
+                run.chain().advance(run, out.outcome, owner);
             }
             group = out.group();
         } catch (RuntimeException | Error e) {
@@ -136,11 +143,19 @@ public final class Ledger<T> {
         return "Ledger[" + topic.name() + " on " + owner.name + "]";
     }
 
+    /** A topic the owner hears, and the step each message on it runs. */
+    private record Heard<T, E>(Topic<E> topic, Step<T, ? super E> step) {
+        void subscribe(Ledger<T> ledger, Inbox owner, int capacity) {
+            owner.subscribe(topic, event -> ledger.run(step, event, null), capacity);
+        }
+    }
+
     // --- Builder ----------------------------------------------------------
 
     public static final class Builder<T> {
         private final T initial;
         private final List<Step<T, ?>> steps = new ArrayList<>();
+        private final List<Heard<T, ?>> heard = new ArrayList<>();
         private int maxDepth;
         private Undo undo;
 
@@ -153,6 +168,24 @@ public final class Ledger<T> {
             Step<T, P> step = new Step<>(Objects.requireNonNull(name, "name"), Objects.requireNonNull(body, "body"));
             steps.add(step);
             return step;
+        }
+
+        /**
+         * Run {@code step} on every message published on {@code topic}, with the message as its arguments: for a
+         * message whose sender does not know this ledger, such as a job's reply or a view's report. The receiver
+         * declares what it hears, as a subscription does, so the sender stays a plain publisher. The step runs as one
+         * sent on its own would, in no chain run; a step that answers a held run {@link Out#resume resumes} it.
+         *
+         * @throws IllegalArgumentException if {@code step} was not declared on this builder
+         */
+        public <E> Builder<T> on(Topic<E> topic, Step<T, ? super E> step) {
+            Objects.requireNonNull(topic, "topic");
+            if (!steps.contains(Objects.requireNonNull(step, "step"))) {
+                throw new IllegalArgumentException("step '" + step.name() + "' heard on '" + topic.name()
+                        + "' is not declared on this builder");
+            }
+            heard.add(new Heard<>(topic, step));
+            return this;
         }
 
         /** Keep the last {@code maxDepth} versions, as {@link State.Builder#history(int)}. 0 (default) keeps none. */

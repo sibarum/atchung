@@ -63,6 +63,7 @@ class ChainTest {
     }
 
     private static final Topic<String> SHOWN = Topic.of("test.shown", String.class);
+    private static final Topic<Answer> ANSWERS = Topic.of("test.answers", Answer.class);
 
     private Fatal previous;
 
@@ -139,7 +140,7 @@ class ChainTest {
                 out.resume(p.waiting(), answer);
                 return new Prompts(null);
             });
-            dialogs = db.build(tick.inbox("dialogs"), "test.dialogs", 16);
+            dialogs = db.on(ANSWERS, answered).build(tick.inbox("dialogs"), "test.dialogs", 16);
 
             chain = Chain.start("close", view, closeClicked)
                     .then(CloseAsked.class, editor, closeRequested)
@@ -193,6 +194,18 @@ class ChainTest {
 
         assertEquals(new Doc(false, false, true), c.editor.state().value());
         assertNull(c.dialogs.state().value().waiting());
+    }
+
+    @Test
+    void anAnswerSentAsAPlainMessageResumesTheRunThroughAHeardTopic() {
+        Close c = new Close(true);
+
+        c.click();
+        c.bus.publish(ANSWERS, new DontSave());
+        c.tick.run(later());
+
+        assertEquals(new Doc(false, false, false), c.editor.state().value());
+        assertEquals(1, c.view.state().value().closings(), "the branch joined the link after it");
     }
 
     @Test

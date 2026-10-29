@@ -39,6 +39,8 @@ public final class Ledger<T> {
     private final Set<Step<T, ?>> declared;
     private final Topic<Step.Transaction<T>> topic;
     private final Inbox owner;
+    /** How many messages each topic this ledger hears may hold: its own, and those it and its chains hear. */
+    final int capacity;
     private final Out out;
     /** Where this ledger's changes are recorded to be undone, or null. */
     private final Undo undo;
@@ -53,6 +55,7 @@ public final class Ledger<T> {
         this.declared = new HashSet<>(builder.steps);
         this.topic = topic;
         this.owner = owner;
+        this.capacity = capacity;
         this.out = new Out(owner);
         this.undo = builder.undo;
         owner.subscribe(topic, this::run, capacity);
@@ -82,7 +85,7 @@ public final class Ledger<T> {
     }
 
     /** One transaction, on the owner's lane, inside a delivery to its inbox. */
-    private void run(Step.Transaction<T> transaction) {
+    void run(Step.Transaction<T> transaction) {
         run(transaction.step(), transaction.args(), transaction.run);
     }
 

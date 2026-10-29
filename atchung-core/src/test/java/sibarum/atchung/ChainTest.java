@@ -197,6 +197,34 @@ class ChainTest {
     }
 
     @Test
+    void aPlainMessageOnAHeardTopicStartsARun() {
+        Atchung bus = Atchung.create();
+        Tick tick = bus.tick(null);
+        Topic<Click> clicks = Topic.of("test.clicks", Click.class);
+        List<Long> runs = new ArrayList<>();
+        Ledger.Builder<View> vb = Ledger.of(new View(0));
+        Step<View, Click> clicked = vb.step("clicked", (v, click, out) -> {
+            runs.add(out.run());
+            out.result(new Closed());
+            return new View(v.clicks() + 1, v.closings());
+        });
+        Step<View, Closed> closed = vb.step("closed", (v, c, out) -> {
+            runs.add(out.run());
+            return new View(v.clicks(), v.closings() + 1);
+        });
+        Ledger<View> view = vb.build(tick.inbox("view"), "test.view", 16);
+        Chain.start("heard", view, clicked).on(clicks).then(Closed.class, view, closed).build();
+
+        bus.publish(clicks, new Click(1));
+        tick.run(later());
+
+        assertEquals(new View(1, 1), view.state().value());
+        assertEquals(2, runs.size());
+        assertEquals(runs.get(0), runs.get(1), "one run, from the message to the end");
+        assertNotEquals(0L, runs.get(0));
+    }
+
+    @Test
     void anAnswerSentAsAPlainMessageResumesTheRunThroughAHeardTopic() {
         Close c = new Close(true);
 

@@ -162,9 +162,21 @@ public final class Chain<T, A> {
         private final String name;
         private final List<List<Alternative>> links = new ArrayList<>();
         private Ledger<T> first;
+        private Topic<? extends A> heard;
 
         private Builder(String name) {
             this.name = name;
+        }
+
+        /**
+         * Also start a run on every message published on {@code topic}, with the message as the first step's
+         * arguments, as {@link Ledger.Builder#on} runs a step: for a cause whose sender does not know the chain, such
+         * as a view that is not a ledger. The first step's ledger's owner hears it, so the run starts in the same
+         * delivery, in order with the owner's other messages.
+         */
+        public Builder<T, A> on(Topic<? extends A> topic) {
+            this.heard = Objects.requireNonNull(topic, "topic");
+            return this;
         }
 
         /**
@@ -218,7 +230,11 @@ public final class Chain<T, A> {
         }
 
         public Chain<T, A> build() {
-            return new Chain<>(name, first, links);
+            Chain<T, A> chain = new Chain<>(name, first, links);
+            if (heard != null) {
+                first.owner().subscribe(heard, event -> first.run(chain.with(event)), first.capacity);
+            }
+            return chain;
         }
     }
 }

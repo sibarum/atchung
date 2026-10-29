@@ -66,12 +66,15 @@ public final class Topic<T> {
     private final Class<T> payloadType;
     private final Kind kind;
     private final Key<T> key;
+    /** What a scoped subscription filters by ({@link #scoped}), or null for a topic with no scope. */
+    private final Key<T> scope;
 
-    private Topic(String name, Class<T> payloadType, Kind kind, Key<T> key) {
+    private Topic(String name, Class<T> payloadType, Kind kind, Key<T> key, Key<T> scope) {
         this.name = Objects.requireNonNull(name, "name");
         this.payloadType = Objects.requireNonNull(payloadType, "payloadType");
         this.kind = kind;
         this.key = key;
+        this.scope = scope;
     }
 
     /** An {@link Kind#EDGE edge} topic: what most channels are, and the kind that loses nothing. */
@@ -81,17 +84,17 @@ public final class Topic<T> {
 
     /** An {@link Kind#EDGE edge} topic: every message is delivered, in order. */
     public static <T> Topic<T> edge(String name, Class<T> payloadType) {
-        return new Topic<>(name, payloadType, Kind.EDGE, null);
+        return new Topic<>(name, payloadType, Kind.EDGE, null, null);
     }
 
     /** A {@link Kind#STATE state} topic whose messages each write the piece of state {@code key} names. */
     public static <T> Topic<T> state(String name, Class<T> payloadType, Key<T> key) {
-        return new Topic<>(name, payloadType, Kind.STATE, Objects.requireNonNull(key, "key"));
+        return new Topic<>(name, payloadType, Kind.STATE, Objects.requireNonNull(key, "key"), null);
     }
 
     /** A {@link Kind#STATE state} topic that is one piece of state as a whole: only its latest message matters. */
     public static <T> Topic<T> state(String name, Class<T> payloadType) {
-        return new Topic<>(name, payloadType, Kind.STATE, e -> WHOLE);
+        return new Topic<>(name, payloadType, Kind.STATE, e -> WHOLE, null);
     }
 
     /**
@@ -101,6 +104,22 @@ public final class Topic<T> {
      */
     public static <T> Topic<T> edge(Class<T> payloadType) {
         return edge(nameOf(payloadType), payloadType);
+    }
+
+    /**
+     * An {@link Kind#EDGE edge} topic whose messages each name a {@code key} to be filtered by, and nothing more: every
+     * message is still delivered, in order, and none folds with another. What a subscription that hears only some
+     * keys ({@link Inbox#subscribe(Topic, Subscriber, int, java.util.Set)}) is offered, so a message it would discard
+     * is never queued for it: the widgets of one window, on a bus every window shares, hear only their own window's.
+     */
+    public static <T> Topic<T> edge(String name, Class<T> payloadType, Key<T> key) {
+        Objects.requireNonNull(key, "key");
+        return new Topic<>(name, payloadType, Kind.EDGE, key, key);
+    }
+
+    /** {@link #edge(String, Class, Key)}, named by its payload as {@link #edge(Class)} is. */
+    public static <T> Topic<T> edge(Class<T> payloadType, Key<T> key) {
+        return edge(nameOf(payloadType), payloadType, key);
     }
 
     /** A {@link Kind#STATE state} topic named by its payload, as {@link #edge(Class)} is, whose messages each write {@code key}. */
@@ -142,7 +161,7 @@ public final class Topic<T> {
      *                               piece of state cannot be folded with anything and is not a state message
      */
     Object keyOf(T event) {
-        if (key == null) {
+        if (kind == Kind.EDGE || key == null) {
             return null;
         }
         Object k = key.of(event);
@@ -151,6 +170,44 @@ public final class Topic<T> {
                     + ": a state message must name the piece of state it writes");
         }
         return k;
+    }
+
+    /**
+     * What a subscription's key filter reads {@code event} by: the piece of state it writes on a state topic, the key
+     * an edge topic declared ({@link #edge(Class, Key)}), or null on an edge that declared none, which no filter
+     * passes.
+     */
+    Object filterKeyOf(T event) {
+        return key == null ? null : key.of(event);
+    }
+
+    /**
+     * Whether a subscription may filter this channel by key: every state topic, and an edge that declared a key.
+     */
+    public boolean keyed() {
+        return key != null;
+    }
+
+    /**
+     * This topic, with messages that also name a {@code scope}: which part of the application a message is about,
+     * apart from the piece of state it writes. An inbox that hears only some scopes
+     * ({@link Inbox#subscribeIn}) is never offered a message from another, so one that is not run for a while (a
+     * closed window's) holds nothing for it. An edge's declared key ({@link #edge(Class, Key)}) is already its scope; a
+     * state topic, whose key is the piece of state, declares one here. Same channel: equality ignores it, as it
+     * ignores the kind.
+     */
+    public Topic<T> scoped(Key<T> scope) {
+        return new Topic<>(name, payloadType, kind, key, Objects.requireNonNull(scope, "scope"));
+    }
+
+    /** Whether this topic names a scope for each message: see {@link #scoped}. */
+    public boolean hasScope() {
+        return scope != null;
+    }
+
+    /** The scope {@code event} is in, or null on a topic with none, which no scope filter passes. */
+    Object scopeOf(T event) {
+        return scope == null ? null : scope.of(event);
     }
 
     @Override

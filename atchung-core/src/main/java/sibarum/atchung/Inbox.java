@@ -100,16 +100,40 @@ public final class Inbox {
     }
 
     /**
-     * As {@link #subscribe(Topic, Subscriber, int)}, delivering only messages whose key is in {@code keys}. Only a
-     * {@link Topic.Kind#STATE state} topic has keys, so a filter on an edge topic is refused.
+     * As {@link #subscribe(Topic, Subscriber, int)}, delivering only messages whose key is in {@code keys}: the piece
+     * of state a {@link Topic.Kind#STATE state} message writes, or the key an edge declared
+     * ({@link Topic#edge(Class, Topic.Key)}). A message filtered out is never queued, so it costs this inbox nothing
+     * and cannot fill it. An edge that declared no key has nothing to filter by, so a filter on one is refused.
      */
     public <T> Subscription subscribe(Topic<T> topic, Subscriber<T> subscriber, int capacity, Set<?> keys) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(subscriber, "subscriber");
-        if (keys != null && topic.kind() != Topic.Kind.STATE) {
-            throw new IllegalArgumentException("topic '" + topic.name() + "' is an edge, and only a state topic has "
-                    + "keys to filter by");
+        if (keys != null && !topic.keyed()) {
+            throw new IllegalArgumentException("topic '" + topic.name() + "' is an edge that declares no key, so it "
+                    + "has nothing to filter by: declare it with Topic.edge(type, key)");
         }
+        return register(topic, subscriber, capacity, keys == null ? null : Set.copyOf(keys), false);
+    }
+
+    /**
+     * As {@link #subscribe(Topic, Subscriber, int)}, delivering only messages in one of {@code scopes}
+     * ({@link Topic#scoped}): which part of the application a message is about, apart from the piece of state it writes.
+     * A message from another scope is never staged or queued for this inbox, so an inbox that is not run for a while
+     * (the widgets of a closed window, on a bus every window shares) holds nothing for it.
+     */
+    public <T> Subscription subscribeIn(Topic<T> topic, Subscriber<T> subscriber, int capacity, Set<?> scopes) {
+        Objects.requireNonNull(topic, "topic");
+        Objects.requireNonNull(subscriber, "subscriber");
+        Objects.requireNonNull(scopes, "scopes");
+        if (!topic.hasScope()) {
+            throw new IllegalArgumentException("topic '" + topic.name() + "' names no scope, so it has nothing to "
+                    + "filter by: declare it with Topic.edge(type, key) or Topic.state(...).scoped(scope)");
+        }
+        return register(topic, subscriber, capacity, Set.copyOf(scopes), true);
+    }
+
+    private <T> Subscription register(Topic<T> topic, Subscriber<T> subscriber, int capacity, Set<?> keys,
+                                      boolean byScope) {
         // Two inboxes hearing one channel as two kinds would have one folding what the other treats as edges, which is
         // the channel with no correct policy. Only inboxes are compared: a Pump or an inline subscriber on the same
         // channel chooses its own policy, as it always has, and is neither checked nor refused here.
@@ -123,7 +147,7 @@ public final class Inbox {
                 }
             }
         }
-        TickReg<T> reg = new TickReg<>(this, topic, subscriber, capacity, keys == null ? null : Set.copyOf(keys));
+        TickReg<T> reg = new TickReg<>(this, topic, subscriber, capacity, keys, byScope);
         subscribed.add(topic);
         Subscription busSub = tick.bus.register(reg);
         return new Subscription() {

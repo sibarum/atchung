@@ -452,7 +452,7 @@ public final class Tick {
         synchronized (lock) {
             for (int i = 0; i < n; i++) {
                 if (regs[i] instanceof TickReg<?> t && t.inbox.tick == this) {
-                    if (!t.isPaused()) {
+                    if (!t.isPaused() && t.acceptsAny(events[i])) {
                         stageLocked(t, events[i], causes[i]);
                         any = true;
                     }

@@ -233,6 +233,55 @@ class TickTest {
         assertEquals(List.of(new Title(7, "v9999")), seen);
     }
 
+    /** A press in one window, on a bus every window shares: the key is the window, and it filters without folding. */
+    record Press(String window, int n) {
+    }
+
+    @Test
+    void aKeyedEdgeIsFilteredAndNeverFoldedAndAnInboxNeverRunHoldsNothingItWouldDiscard() {
+        Topic<Press> presses = Topic.edge(Press.class, Press::window);
+        Atchung bus = Atchung.create();
+        Tick main = bus.tick(null);
+        Tick about = bus.tick(null);
+        List<Press> seen = new ArrayList<>();
+        main.inbox("main").subscribe(presses, seen::add, 4, Set.of("main"));
+        // Capacity 1 and never run, as a closed window's tick is: every main-window press offered to it would fail it.
+        about.inbox("about").subscribe(presses, p -> { }, 1, Set.of("about"));
+
+        for (int i = 0; i < 3; i++) {
+            bus.publish(presses, new Press("main", i));
+        }
+        main.run(later());
+
+        assertTrue(presses.keyed());
+        assertEquals(Topic.Kind.EDGE, presses.kind());
+        assertEquals(List.of(new Press("main", 0), new Press("main", 1), new Press("main", 2)), seen,
+                "every edge of the key, in order: a key on an edge filters and never folds");
+        assertFalse(about.hasPending(), "a filtered-out edge was staged for a tick that is never run");
+    }
+
+    @Test
+    void aScopedStateTopicFiltersByScopeAndStillFoldsByKey() {
+        Topic<Title> titles = TITLE.scoped(t -> t.id() < 10 ? "main" : "about");
+        Atchung bus = Atchung.create();
+        Tick main = bus.tick(null);
+        Tick about = bus.tick(null);
+        List<Title> seen = new ArrayList<>();
+        main.inbox("main").subscribeIn(titles, seen::add, 1, Set.of("main"));
+        about.inbox("about").subscribeIn(titles, t -> { }, 1, Set.of("about"));
+        Inbox plain = main.inbox("plain");
+        assertThrows(IllegalArgumentException.class, () -> plain.subscribeIn(A, s -> { }, 1, Set.of("x")),
+                "a topic with no scope has nothing to filter by");
+
+        for (int i = 0; i < 1000; i++) {
+            bus.publish(titles, new Title(1, "v" + i));
+        }
+        main.run(later());
+
+        assertEquals(List.of(new Title(1, "v999")), seen, "still the last write per key");
+        assertFalse(about.hasPending(), "another scope's state was staged for a tick that is never run");
+    }
+
     @Test
     void aKeyFilterDeliversOnlyTheKeysItNames() {
         Atchung bus = Atchung.create();
@@ -241,7 +290,7 @@ class TickTest {
         tick.inbox("tab 2").subscribe(TITLE, seen::add, 1, Set.of(2));
         Inbox edges = tick.inbox("edge filter");
         assertThrows(IllegalArgumentException.class, () -> edges.subscribe(A, s -> { }, 1, Set.of("x")),
-                "only a state topic has keys");
+                "an edge that declares no key has nothing to filter by");
 
         bus.publish(TITLE, new Title(1, "a"));
         bus.publish(TITLE, new Title(2, "b"));

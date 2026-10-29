@@ -225,4 +225,16 @@ class LedgerTest {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> b.on(SAID, foreign));
         assertEquals("step 'foreign' heard on 'test.said' is not declared on this builder", e.getMessage());
     }
+
+    @Test
+    void itsInboxListsWhatItHearsAndItsOwnTopic() {
+        Atchung bus = Atchung.create();
+        Tick tick = bus.tick(null);
+        Inbox inbox = tick.inbox("notes");
+        Ledger.Builder<Notes> b = Ledger.of(new Notes(List.of()));
+        Step<Notes, String> add = b.step("add", (notes, line, out) -> notes.with(line));
+        Ledger<Notes> notes = b.on(SAID, add).build(inbox, "test.notes", 16);
+
+        assertEquals(List.of(notes.topic(), SAID), inbox.topics());
+    }
 }

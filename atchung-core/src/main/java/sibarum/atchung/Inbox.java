@@ -1,6 +1,8 @@
 package sibarum.atchung;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
@@ -65,6 +67,9 @@ public final class Inbox {
     /** What a subscriber threw in this round, for the coordinator to rethrow. */
     Throwable failure;
 
+    /** Every topic subscribed here, in order: what {@link #topics()} answers. */
+    private final List<Topic<?>> subscribed = new ArrayList<>();
+
     Inbox(Tick tick, String name, int lane, int position) {
         this.tick = tick;
         this.name = name;
@@ -75,6 +80,14 @@ public final class Inbox {
     /** This inbox's name, as the tick was told it. */
     public String name() {
         return name;
+    }
+
+    /**
+     * Every topic subscribed to here, in the order subscribed: so whoever owns the inbox can compare what it hears
+     * with what it declared.
+     */
+    public List<Topic<?>> topics() {
+        return List.copyOf(subscribed);
     }
 
     /**
@@ -111,6 +124,7 @@ public final class Inbox {
             }
         }
         TickReg<T> reg = new TickReg<>(this, topic, subscriber, capacity, keys == null ? null : Set.copyOf(keys));
+        subscribed.add(topic);
         Subscription busSub = tick.bus.register(reg);
         return new Subscription() {
             @Override

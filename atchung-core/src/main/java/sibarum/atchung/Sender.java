@@ -18,14 +18,14 @@ import sibarum.probe.Cause;
  * <p>A sender belongs to the component whose inbox made it. Handed to another component, its sends would be filed
  * as that component's and its order would be wrong, which is why a framework builds senders and never shares one.
  *
- * <p>The other kind is {@link #waiting}: a sender for a thread that reads from outside the process and is allowed
- * to block. It belongs to no inbox, since it is never inside a delivery.
+ * <p>The other kind is {@link #outside}: a sender for a thread that reads from outside the process. It belongs to
+ * no inbox, since it is never inside a delivery.
  */
 public final class Sender<T> {
 
     private final Inbox inbox;
     private final Topic<T> topic;
-    /** For a {@link #waiting} sender, its bus and the source each send begins a cause of; else null. */
+    /** For an {@link #outside} sender, its bus and the source each send begins a cause of; else null. */
     private final Atchung bus;
     private final Cause.Source source;
 
@@ -45,12 +45,11 @@ public final class Sender<T> {
 
     /**
      * A sender for a thread outside every tick that reads from outside the process: each send begins a new cause of
-     * {@code source}, since the message arrives from outside as input does, and is published by
-     * {@link Atchung#publishWaiting}, so a full mailbox makes the sender wait rather than overflow. A send interrupted
-     * while waiting is dropped and leaves the interrupt set, for the thread's next blocking read to answer: a thread
-     * being stopped has no use for what it was sending. <b>Never use one on a thread that runs ticks.</b>
+     * {@code source}, since the message arrives from outside as input does, so whoever traces it back finds where it
+     * came from rather than nothing. Otherwise an ordinary publish: a mailbox it overflows fails as any does, and a
+     * publisher that can outrun its readers batches what it sends.
      */
-    public static <T> Sender<T> waiting(Atchung bus, Topic<T> topic, Cause.Source source) {
+    public static <T> Sender<T> outside(Atchung bus, Topic<T> topic, Cause.Source source) {
         return new Sender<>(Objects.requireNonNull(bus, "bus"), Objects.requireNonNull(topic, "topic"),
                 Objects.requireNonNull(source, "source"));
     }
@@ -66,7 +65,7 @@ public final class Sender<T> {
         if (source != null) {
             long previous = Cause.enter(source.next());
             try {
-                bus.publishWaiting(topic, event);
+                bus.publish(topic, event);
             } finally {
                 Cause.exit(previous);
             }

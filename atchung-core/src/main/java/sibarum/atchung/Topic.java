@@ -182,6 +182,15 @@ public final class Topic<T> {
     }
 
     /**
+     * The key {@code event} names, as a key filter reads it ({@link #filterKeyOf}): the piece of state on a state topic,
+     * the declared key on a keyed edge, and null on an edge that declared none. For whoever keeps something per key
+     * outside an inbox, as a framework's source keeps one run per key of its requests.
+     */
+    public Object keyFor(T event) {
+        return filterKeyOf(event);
+    }
+
+    /**
      * Whether a subscription may filter this channel by key: every state topic, and an edge that declared a key.
      */
     public boolean keyed() {

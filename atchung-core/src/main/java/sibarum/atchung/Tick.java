@@ -130,6 +130,8 @@ public final class Tick {
     private Object[] stagedEvents = new Object[64];
     private long[] stagedCauses = new long[64];
     private int staged;
+    /** How many publishers are in {@link #stageWaiting}, waiting for room. Written under the lock. */
+    private volatile int waiting;
     private TickReg<?>[] spareRegs = new TickReg<?>[64];
     private Object[] spareEvents = new Object[64];
     private long[] spareCauses = new long[64];
@@ -200,6 +202,7 @@ public final class Tick {
         lastRounds = 0;
         lastCarried = false;
         if (!anyQueued()) {
+            wakeWaiting();
             return 0;
         }
         int delivered = 0;
@@ -235,6 +238,7 @@ public final class Tick {
             }
         } finally {
             handOver();
+            wakeWaiting();
         }
         Probe.count(Lane.BUS, "tick rounds", lastRounds);
         Probe.count(Lane.BUS, "tick delivered", delivered);
@@ -335,6 +339,14 @@ public final class Tick {
                 enqueue(regs[i], events[i], causes[i], 0);
             }
         } finally {
+            synchronized (lock) {
+                // Only now that each is queued (or dropped), so a waiting publish never sees one in neither count.
+                for (int i = 0; i < n; i++) {
+                    if (regs[i].cells == null) {
+                        regs[i].stagedEdges--;
+                    }
+                }
+            }
             java.util.Arrays.fill(regs, 0, n, null);
             java.util.Arrays.fill(events, 0, n, null);
             synchronized (lock) {
@@ -443,6 +455,45 @@ public final class Tick {
     }
 
     /**
+     * {@link #stage}, waiting first while an edge would not fit: what is queued for {@code reg} and what is staged for it
+     * together reach its capacity. Checked and staged under the lock, so two waiting publishers cannot both take the
+     * last place. On the publisher's thread, which is never the coordinator's.
+     *
+     * @return false when interrupted while waiting: nothing is staged, and the interrupt is left set
+     */
+    <T> boolean stageWaiting(TickReg<T> reg, T event, long cause) {
+        synchronized (lock) {
+            if (reg.cells == null) {
+                waiting++;
+                try {
+                    while (!reg.closed && reg.stagedEdges + reg.edges >= reg.capacity) {
+                        lock.wait();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                } finally {
+                    waiting--;
+                }
+            }
+            stageLocked(reg, event, cause);
+        }
+        if (arrival != null) {
+            arrival.run();
+        }
+        return true;
+    }
+
+    /** Wake any publisher waiting for room, now that a run has delivered. Coordinator; free when nobody waits. */
+    private void wakeWaiting() {
+        if (waiting > 0) {
+            synchronized (lock) {
+                lock.notifyAll();
+            }
+        }
+    }
+
+    /**
      * Stage every message among the first {@code n} of {@code regs} that is for an inbox of this tick, in order and in
      * one step, and clear each one staged out of {@code regs}. Called by another tick handing over; see
      * {@link #handOver}. A paused subscription is skipped, as {@code deliver} skips it: pausing is lossy.
@@ -482,5 +533,8 @@ public final class Tick {
         stagedEvents[staged] = event;
         stagedCauses[staged] = cause;
         staged++;
+        if (reg.cells == null) {
+            reg.stagedEdges++;
+        }
     }
 }

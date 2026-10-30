@@ -15,7 +15,8 @@ import sibarum.probe.Zone;
  * A realtime, multithreaded broadcast/subscribe event bus. Publish an event on a {@link Topic} and
  * every subscriber to that topic is notified. <em>Attention! Something happened.</em>
  *
- * <p><b>Publishing never blocks</b> (except a {@link Backpressure#BLOCK} pumped subscriber): a fast
+ * <p><b>Publishing never blocks</b> (except a {@link Backpressure#BLOCK} pumped subscriber, and
+ * {@link #publishWaiting}, which is asked for by name): a fast
  * producer is never stalled by a slow consumer. Delivery is chosen per subscriber:
  * <ul>
  *   <li>{@link #subscribe(Topic, Subscriber)} — <b>inline</b>: run on the publisher's thread.
@@ -118,6 +119,47 @@ public final class Atchung {
                 typed.deliver(event);
             }
         }
+    }
+
+    /**
+     * Publish {@code event} as {@link #publish} does, except that an edge for a full {@link Inbox} <b>waits for
+     * room</b> instead of overflowing. For a publisher that reads from outside the process and is allowed to block,
+     * as a framework's source is: waiting is how the outside is pushed back on, where a {@link MailboxOverflow} would
+     * let a fast peer end the application. A state topic never waits, since it folds and cannot fill.
+     *
+     * <p>Room is counted against what is queued and what is staged for the next tick, under the tick's lock, so two
+     * publishers waiting on one mailbox take turns rather than both filling it. What a component sends on the same
+     * topic during a tick is not waited for and can still overflow it: a channel fed from outside is fed from outside
+     * only. A waiter is woken when a tick has run. <b>Never call this on a thread that runs ticks</b>: it would wait
+     * for itself.
+     *
+     * <p>Every other kind of subscription is delivered as by {@link #publish}, a {@link Backpressure#BLOCK} pump
+     * blocking as it always does.
+     *
+     * @return {@code true} once every subscriber has it; {@code false} when the thread was interrupted while waiting,
+     *         which leaves the interrupt set and the subscribers from the one it waited on without the message, as a
+     *         publisher that is being stopped would want
+     */
+    public <T> boolean publishWaiting(Topic<T> topic, T event) {
+        Objects.requireNonNull(topic, "topic");
+        if (Probe.ON && Cause.current() == Cause.NONE) {
+            Probe.count(Lane.BUS, "uncaused " + Thread.currentThread().getName());
+        }
+        Reg<?>[] regs = registry.get(topic);
+        if (regs == null) {
+            Probe.count(Lane.BUS, topic.name());
+            return true;
+        }
+        try (Zone z = Probe.zone(Lane.BUS, topic.name())) {
+            for (Reg<?> reg : regs) {
+                @SuppressWarnings("unchecked")
+                Reg<T> typed = (Reg<T>) reg;
+                if (!typed.deliverWaiting(event)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /** Subscribe with <b>inline</b> delivery on the publisher's thread. */
@@ -226,6 +268,15 @@ public final class Atchung {
         }
 
         abstract void doDeliver(T event);
+
+        /**
+         * {@link #deliver}, for {@link Atchung#publishWaiting}: only a tick's mailbox knows how to wait for room, so
+         * every other kind of subscription delivers as a publish does.
+         */
+        boolean deliverWaiting(T event) {
+            deliver(event);
+            return true;
+        }
     }
 
     private static final class InlineReg<T> extends Reg<T> {

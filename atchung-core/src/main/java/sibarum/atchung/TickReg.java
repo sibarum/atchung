@@ -12,7 +12,7 @@ final class TickReg<T> extends Atchung.Reg<T> {
 
     final Inbox inbox;
     final Subscriber<T> subscriber;
-    private final int capacity;
+    final int capacity;
     /** The keys this subscription takes, or null for all of them. Only ever set on a keyed topic: see Topic.keyed. */
     private final Set<?> keys;
     /** Whether {@link #keys} are scopes ({@link Topic#scoped}) rather than keys. */
@@ -20,8 +20,16 @@ final class TickReg<T> extends Atchung.Reg<T> {
 
     /** On a state topic, the queued message for each key. Coordinator between rounds, the lane during one. */
     final HashMap<Object, Inbox.Entry> cells;
-    /** How many edges are queued, against {@link #capacity}. Coordinator between rounds, the lane during one. */
-    int edges;
+    /**
+     * How many edges are queued, against {@link #capacity}. Written by the coordinator between rounds and the lane
+     * during one; volatile so that a {@linkplain Atchung#publishWaiting waiting publish} on another thread sees it fall.
+     */
+    volatile int edges;
+    /**
+     * How many edges are staged for this subscription and not yet taken into the inbox, counted until after they have
+     * been, so a message between the two is counted twice and never not at all. Under the tick's lock.
+     */
+    int stagedEdges;
 
     long delivered;
     final long subscribedMillis = System.currentTimeMillis();
@@ -62,6 +70,15 @@ final class TickReg<T> extends Atchung.Reg<T> {
             return;
         }
         inbox.tick.stage(this, event, sibarum.probe.Cause.current());
+    }
+
+    /** As {@link #doDeliver}, but an edge waits while this mailbox is full. False when the wait was interrupted. */
+    @Override
+    boolean deliverWaiting(T event) {
+        if (isPaused() || !accepts(event)) {
+            return true;
+        }
+        return inbox.tick.stageWaiting(this, event, sibarum.probe.Cause.current());
     }
 
     /** Queue {@code event} for the next round, folding by key on a state topic. Coordinator only. */

@@ -119,6 +119,15 @@ public final class Probe {
     private static final Ledger LEDGER;
     private static final long ORIGIN = System.nanoTime();
 
+    /**
+     * Where every row's monotonic time counts from: the {@code System.nanoTime()} reading taken when the probe started.
+     * A row's {@code t_mono_ns} plus this is the row's moment on the machine's monotonic clock, which another process
+     * on the same machine reads too: how the Inspector sets a target's rows beside its own frames.
+     */
+    public static long originNanos() {
+        return ORIGIN;
+    }
+
     static {
         // Nobody asked: the run's mode may have (an automation run turns the probe on, into a file beside the log),
         // and if not it stays off. Anything asked for explicitly wins over the mode.

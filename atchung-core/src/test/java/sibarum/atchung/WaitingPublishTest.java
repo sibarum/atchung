@@ -88,6 +88,26 @@ class WaitingPublishTest {
     }
 
     @Test
+    void aWaitingSenderBeginsACauseOfItsSourceForEachSend() {
+        sibarum.probe.Cause.Source source = sibarum.probe.Cause.source("test.waiting.source", sibarum.probe.Cause.Kind.IO);
+        Atchung bus = Atchung.create();
+        Tick tick = bus.tick(null);
+        List<Long> causes = new CopyOnWriteArrayList<>();
+        tick.inbox("c").subscribe(EDGES, s -> causes.add(sibarum.probe.Cause.current()), 4);
+        Sender<String> sender = Sender.waiting(bus, EDGES, source);
+
+        sender.send("a");
+        sender.send("b");
+        tick.run(System.nanoTime() + 1_000_000, Tick.ONE_THREAD);
+
+        assertEquals(2, causes.size());
+        for (long c : causes) {
+            assertEquals(source.index(), sibarum.probe.Cause.sourceOf(c), "each message carries the source's cause");
+        }
+        assertTrue(causes.get(0) != causes.get(1), "and a cause of its own");
+    }
+
+    @Test
     void aStateTopicNeverWaits() {
         Topic<String> state = Topic.state("test.waiting.state", String.class, s -> "one");
         Atchung bus = Atchung.create();

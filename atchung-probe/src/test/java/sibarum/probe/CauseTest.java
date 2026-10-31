@@ -53,6 +53,15 @@ class CauseTest {
     }
 
     @Test
+    void everySourceCanBeListedAsItsRowNamesIt() {
+        Cause.Source first = Cause.source("cause-test.listed-first", Cause.Kind.COMMAND);
+        Cause.Source second = Cause.source("cause-test.listed-second", Cause.Kind.IO);
+        java.util.List<String> sources = Cause.sources();
+        assertTrue(sources.contains(first.key() + " cause-test.listed-first"), sources.toString());
+        assertTrue(sources.indexOf(first.toString()) < sources.indexOf(second.toString()), "in the order registered");
+    }
+
+    @Test
     void causesAreDistinctAcrossSources() {
         Set<Long> seen = new HashSet<>();
         for (Cause.Kind kind : Cause.Kind.values()) {

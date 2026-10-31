@@ -175,6 +175,16 @@ public final class Cause {
         return s;
     }
 
+    /**
+     * Every source registered so far, in the order they were, each as its {@code cause.source} row says it
+     * ({@code t07 gui.frame}): for a reader that arrives after those rows were written, or after a ring let them go,
+     * and must still resolve a cause to what set it off.
+     */
+    public static java.util.List<String> sources() {
+        return SOURCES.values().stream().filter(s -> s != OVERFLOW)
+                .sorted(java.util.Comparator.comparingInt(Source::index)).map(Source::toString).toList();
+    }
+
     /** The cause this thread is working in, or {@link #NONE}. */
     public static long current() {
         return CURRENT.get()[0];

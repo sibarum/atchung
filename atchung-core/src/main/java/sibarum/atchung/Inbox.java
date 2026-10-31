@@ -2,6 +2,7 @@ package sibarum.atchung;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -303,6 +304,10 @@ public final class Inbox {
                 reg.delivered++;
                 reg.lastDeliveredMillis = now;
                 Cause.enter(cause);
+                if (reg.receiveRow != null) {
+                    // In the message's cause, so a reader following it sees which inbox it reached, and when.
+                    Probe.mark(Lane.BUS, "receive", reg.receiveRow, hops);
+                }
                 deliverTo(reg, event);
                 deliveredThisRound++;
             }
@@ -323,8 +328,26 @@ public final class Inbox {
         reg.subscriber.on((T) event);
     }
 
-    /** A send from inside one of this inbox's deliveries: into the outbox, for the end of the round. */
+    /**
+     * The detail each {@code send} row of this inbox begins with, {@code <topic> from <inbox>}, built once a topic
+     * while profiling. Its lane's thread only, as {@link #post} is.
+     */
+    private final HashMap<Topic<?>, String> sendRows = new HashMap<>();
+
+    /**
+     * A send from inside one of this inbox's deliveries: into the outbox, for the end of the round. Profiling, it
+     * writes a {@code send} row in the cause it is sent in, naming the topic and this inbox, so a reader following
+     * that cause sees which component the message left; the hop count after it is the one the message will carry.
+     */
     void post(Topic<?> topic, Object event) {
+        if (Probe.ON) {
+            String row = sendRows.get(topic);
+            if (row == null) {
+                row = topic.name() + " from " + name;
+                sendRows.put(topic, row);
+            }
+            Probe.mark(Lane.BUS, "send", row, hops + 1);
+        }
         int n = outSize;
         if (n == outTopics.length) {
             outTopics = Arrays.copyOf(outTopics, n * 2);

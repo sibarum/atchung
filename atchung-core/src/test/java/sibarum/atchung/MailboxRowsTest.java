@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
+import sibarum.probe.Cause;
 import sibarum.probe.Lane;
 import sibarum.probe.LiveSink;
 import sibarum.probe.Probe;
@@ -194,5 +195,47 @@ class MailboxRowsTest {
 
     private static List<String> of(List<String> rows, String mailbox) {
         return rows.stream().filter(r -> r.split(" ")[1].equals(mailbox)).toList();
+    }
+
+    @Test
+    void aComponentsSendAndEveryDeliverySayWhichInboxInTheMessagesOwnCause() {
+        Topic<String> ask = Topic.of("rows.ask", String.class);
+        Topic<String> reply = Topic.of("rows.reply", String.class);
+        Atchung bus = Atchung.create();
+        Tick tick = bus.tick(null);
+        Inbox first = tick.inbox("first");
+        Inbox second = tick.inbox("second");
+        Sender<String> answer = first.sender(reply);
+        first.subscribe(ask, s -> answer.send(s + "!"), 16);
+        second.subscribe(reply, s -> { }, 16);
+        List<String> caused = new ArrayList<>();
+        LiveSink withCauses = new LiveSink() {
+            @Override
+            public void row(long seq, long mono, long wall, String thread, Lane lane, String kind, String detail) {
+            }
+
+            @Override
+            public void row(long seq, long mono, long wall, String thread, Lane lane, String kind, String detail,
+                            long cause) {
+                if (lane == Lane.BUS && (kind.equals("send") || kind.equals("receive"))) {
+                    synchronized (caused) {
+                        caused.add(kind + " " + detail + " @" + Cause.format(cause));
+                    }
+                }
+            }
+        };
+        assertTrue(Probe.attach(withCauses));
+        try {
+            Cause.Source source = Cause.source("rows.test", Cause.Kind.IO);
+            Cause.begin(source, () -> bus.publish(ask, "x"));
+            tick.run(System.nanoTime() + 60_000_000_000L);
+        } finally {
+            Probe.detach(withCauses);
+        }
+        assertEquals(3, caused.size(), caused.toString());
+        String cause = caused.getFirst().substring(caused.getFirst().indexOf('@'));
+        assertEquals(List.of("receive rows.ask to first 0 " + cause, "send rows.reply from first 1 " + cause,
+                "receive rows.reply to second 1 " + cause), caused,
+                "where it arrived, what that component sent on, and where that arrived: one cause throughout");
     }
 }

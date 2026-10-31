@@ -3,6 +3,8 @@ package sibarum.atchung;
 import java.util.HashMap;
 import java.util.Set;
 
+import sibarum.probe.Probe;
+
 /**
  * One subscription of an {@link Inbox}: the bus's routing entry for it. A publish from outside a tick reaches
  * {@link #doDeliver} on the publisher's thread and is staged; a send inside one reaches {@link #enqueue} on the
@@ -24,6 +26,8 @@ final class TickReg<T> extends Atchung.Reg<T> {
     int edges;
 
     long delivered;
+    /** What each {@code receive} row of this subscription says first, {@code <topic> to <inbox>}; null unprofiled. */
+    final String receiveRow;
     final long subscribedMillis = System.currentTimeMillis();
     long lastDeliveredMillis;
     /** Set by closing; the delivery that finds it set skips the message. */
@@ -35,6 +39,7 @@ final class TickReg<T> extends Atchung.Reg<T> {
             throw new IllegalArgumentException("capacity must be >= 1, was " + capacity);
         }
         this.inbox = inbox;
+        this.receiveRow = Probe.ON ? topic.name() + " to " + inbox.name : null;
         this.subscriber = subscriber;
         this.capacity = capacity;
         this.keys = keys;

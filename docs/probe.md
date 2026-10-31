@@ -148,6 +148,20 @@ the last row that mailbox writes. Each row costs what the `<topic> depth` row co
 the detail is composed only when tracing (`Probe.mark(lane, kind, subject, n)`), and nothing is done when the probe
 is off. In the rollup each kind is one counter whose count is the number of rows.
 
+### Inbox rows
+
+An `Inbox` writes two rows on the `bus` lane, each **in the message's own cause**, so a reader following one cause
+sees every inbox it reached and everything a component sent on because of it:
+
+| kind | detail | when | thread |
+| --- | --- | --- | --- |
+| `send` | `<topic> from <inbox> <hops>` | a component's step sent through its `Sender` | the inbox's lane |
+| `receive` | `<topic> to <inbox> [<mailbox>] <hops>` | a tick delivered the message to a subscriber | the inbox's lane |
+
+`<mailbox>` is there when the subscription was named, `Inbox.subscribe(String mailbox, ...)`, as a pump's is: the
+framework names each `@Subscribe` mailbox by its `class#method`, so a delivery to the GUI's one inbox says which view
+method it reached (`... to widgets dev.example.View#timeline 1`). Both details are fixed at subscribe.
+
 These rows are a contract with the VexelRay Inspector, which draws the bus as a circuit from them
 (`vexelray-inspector/docs/bus-circuit.md` §3): change their shape there first.
 

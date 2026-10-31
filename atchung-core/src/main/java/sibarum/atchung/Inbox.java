@@ -107,13 +107,31 @@ public final class Inbox {
      * and cannot fill it. An edge that declared no key has nothing to filter by, so a filter on one is refused.
      */
     public <T> Subscription subscribe(Topic<T> topic, Subscriber<T> subscriber, int capacity, Set<?> keys) {
+        return subscribe(null, topic, subscriber, capacity, keys);
+    }
+
+    /**
+     * As {@link #subscribe(Topic, Subscriber, int, Set)}, into a mailbox named {@code mailbox}: each {@code receive}
+     * row it writes says the name after the inbox's, {@code <topic> to <inbox> <mailbox>}, so a reader following a
+     * message's cause sees which of an inbox's subscribers it reached and not only which inbox. As a {@link Pump}'s
+     * named mailbox, a declared subscriber's name is its {@code class#method}.
+     *
+     * @param mailbox the mailbox's name, or {@code null} for an unnamed one; non-empty and holding no space
+     * @param keys    as {@link #subscribe(Topic, Subscriber, int, Set)}, or {@code null} for every message
+     */
+    public <T> Subscription subscribe(String mailbox, Topic<T> topic, Subscriber<T> subscriber, int capacity,
+                                      Set<?> keys) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(subscriber, "subscriber");
+        if (mailbox != null && (mailbox.isEmpty() || mailbox.indexOf(' ') >= 0)) {
+            throw new IllegalArgumentException("mailbox name '" + mailbox + "' must be non-empty and hold no space: "
+                    + "it is one word of each receive row");
+        }
         if (keys != null && !topic.keyed()) {
             throw new IllegalArgumentException("topic '" + topic.name() + "' is an edge that declares no key, so it "
                     + "has nothing to filter by: declare it with Topic.edge(type, key)");
         }
-        return register(topic, subscriber, capacity, keys == null ? null : Set.copyOf(keys), false);
+        return register(mailbox, topic, subscriber, capacity, keys == null ? null : Set.copyOf(keys), false);
     }
 
     /**
@@ -130,11 +148,11 @@ public final class Inbox {
             throw new IllegalArgumentException("topic '" + topic.name() + "' names no scope, so it has nothing to "
                     + "filter by: declare it with Topic.edge(type, key) or Topic.state(...).scoped(scope)");
         }
-        return register(topic, subscriber, capacity, Set.copyOf(scopes), true);
+        return register(null, topic, subscriber, capacity, Set.copyOf(scopes), true);
     }
 
-    private <T> Subscription register(Topic<T> topic, Subscriber<T> subscriber, int capacity, Set<?> keys,
-                                      boolean byScope) {
+    private <T> Subscription register(String mailbox, Topic<T> topic, Subscriber<T> subscriber, int capacity,
+                                      Set<?> keys, boolean byScope) {
         // Two inboxes hearing one channel as two kinds would have one folding what the other treats as edges, which is
         // the channel with no correct policy. Only inboxes are compared: a Pump or an inline subscriber on the same
         // channel chooses its own policy, as it always has, and is neither checked nor refused here.
@@ -148,7 +166,7 @@ public final class Inbox {
                 }
             }
         }
-        TickReg<T> reg = new TickReg<>(this, topic, subscriber, capacity, keys, byScope);
+        TickReg<T> reg = new TickReg<>(this, mailbox, topic, subscriber, capacity, keys, byScope);
         subscribed.add(topic);
         Subscription busSub = tick.bus.register(reg);
         return new Subscription() {

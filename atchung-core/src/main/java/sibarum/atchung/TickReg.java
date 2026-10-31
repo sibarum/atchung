@@ -26,20 +26,25 @@ final class TickReg<T> extends Atchung.Reg<T> {
     int edges;
 
     long delivered;
-    /** What each {@code receive} row of this subscription says first, {@code <topic> to <inbox>}; null unprofiled. */
+    /**
+     * What each {@code receive} row of this subscription says first, {@code <topic> to <inbox>} and then the mailbox's
+     * name when it has one; null unprofiled.
+     */
     final String receiveRow;
     final long subscribedMillis = System.currentTimeMillis();
     long lastDeliveredMillis;
     /** Set by closing; the delivery that finds it set skips the message. */
     volatile boolean closed;
 
-    TickReg(Inbox inbox, Topic<T> topic, Subscriber<T> subscriber, int capacity, Set<?> keys, boolean byScope) {
+    TickReg(Inbox inbox, String mailbox, Topic<T> topic, Subscriber<T> subscriber, int capacity, Set<?> keys,
+            boolean byScope) {
         super(topic);
         if (capacity < 1) {
             throw new IllegalArgumentException("capacity must be >= 1, was " + capacity);
         }
         this.inbox = inbox;
-        this.receiveRow = Probe.ON ? topic.name() + " to " + inbox.name : null;
+        this.receiveRow = !Probe.ON ? null
+                : topic.name() + " to " + inbox.name + (mailbox == null ? "" : " " + mailbox);
         this.subscriber = subscriber;
         this.capacity = capacity;
         this.keys = keys;

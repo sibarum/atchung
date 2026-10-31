@@ -207,7 +207,7 @@ class MailboxRowsTest {
         Inbox second = tick.inbox("second");
         Sender<String> answer = first.sender(reply);
         first.subscribe(ask, s -> answer.send(s + "!"), 16);
-        second.subscribe(reply, s -> { }, 16);
+        second.subscribe("Shown#reply", reply, s -> { }, 16, null);
         List<String> caused = new ArrayList<>();
         LiveSink withCauses = new LiveSink() {
             @Override
@@ -235,7 +235,16 @@ class MailboxRowsTest {
         assertEquals(3, caused.size(), caused.toString());
         String cause = caused.getFirst().substring(caused.getFirst().indexOf('@'));
         assertEquals(List.of("receive rows.ask to first 0 " + cause, "send rows.reply from first 1 " + cause,
-                "receive rows.reply to second 1 " + cause), caused,
-                "where it arrived, what that component sent on, and where that arrived: one cause throughout");
+                "receive rows.reply to second Shown#reply 1 " + cause), caused,
+                "where it arrived, what that component sent on, and where that arrived (a named mailbox by its name "
+                + "too): one cause throughout");
+    }
+
+    @Test
+    void aMailboxNameIsOneWord() {
+        Inbox in = Atchung.create().tick(null).inbox("in");
+        Topic<String> topic = Topic.of("rows.named", String.class);
+        assertThrows(IllegalArgumentException.class, () -> in.subscribe("two words", topic, s -> { }, 4, null));
+        assertThrows(IllegalArgumentException.class, () -> in.subscribe("", topic, s -> { }, 4, null));
     }
 }

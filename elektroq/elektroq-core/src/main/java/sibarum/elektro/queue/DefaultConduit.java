@@ -243,15 +243,22 @@ public final class DefaultConduit implements Conduit, FrameListener, PeerListene
         if (type == null) {
             return; // unknown type id: drop rather than guess
         }
-        Object payload = decodePayload(type, envelopeFrame.facts(), reader, bytes, offset);
-
         if (header.reply()) {
             Pending waiter = pending.remove(header.correlationId());
-            if (waiter != null) {
-                waiter.future().complete(payload);
+            if (waiter == null) {
+                return;
+            }
+            // A reply that cannot be read fails its request with the reason, at once. Thrown from here instead, it
+            // left the request waiting for a reply that had come, until the timeout, or forever without one: the
+            // shape a sender of another schema version took, which is the case that most needs saying.
+            try {
+                waiter.future().complete(decodePayload(type, envelopeFrame.facts(), reader, bytes, offset));
+            } catch (ElektroException e) {
+                waiter.future().completeExceptionally(e);
             }
             return;
         }
+        Object payload = decodePayload(type, envelopeFrame.facts(), reader, bytes, offset);
 
         List<Actor<?>> subscribers = actors.get(header.typeId());
         if (subscribers == null || subscribers.isEmpty()) {

@@ -36,7 +36,13 @@ out once, at startup:
 | `TEST` | under a test runner | `WARN` | off | off |
 | `DEV` | a JVM that is not a native image, nobody driving | `INFO` | `DEBUG` | off |
 | `PACKAGED` | a native image — what a user runs | `WARN` | `INFO` | off |
-| `AUTOMATION` | the automation socket is on (`--automation`, `-Dautomation`) | `DEBUG` | `TRACE` | `frame,input,layout,app`, correlation trace beside the log |
+| `AUTOMATION` | the automation socket is on (`--automation`, `-Dautomation`) | `DEBUG` | `TRACE` | every lane when the diagnostics socket is asked for (below); the control socket alone, `frame,input,layout,app`; a correlation trace beside the log |
+
+**The diagnostics socket asked for at launch is the one setting the Inspector needs.** `--automation=0` (both sockets)
+or `--automation.diagnostics=<port>` makes the run *inspected* (`LogConfig.inspected`): the probe records every lane,
+traced, and no `-Dprobe` or `-Dprobe.format` narrows it, because the probe is decided once, before anything can
+attach, and the Inspector trusts a run of its own link version to send all it reads. Only `-Dprobe.out` still says
+where the trace goes. The control socket alone is a driven run with no Inspector to feed, and keeps the lighter lanes.
 
 **Being driven is what makes a run loud**, and it beats `PACKAGED`: somebody or something is reading along, and the
 point of driving an application is to find out what it did. So `ottermate --launch … ` gets a `TRACE` file, the

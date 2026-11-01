@@ -37,7 +37,7 @@ class StandardErrorTest {
 
     private static LogConfig config(Path dir) {
         return new LogConfig("t", Mode.PACKAGED, Level.WARN, Level.INFO, Map.of(), dir, LogConfig.Format.TEXT,
-                1024 * 1024, 2, null, List.of());
+                1024 * 1024, 2, null, false, List.of());
     }
 
     @Test

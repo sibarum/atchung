@@ -211,12 +211,13 @@ public final class Logging {
             LogConfig next;
             if (logger == null || logger.isBlank()) {
                 next = new LogConfig(c.app(), c.mode(), level, c.fileEnabled() ? level : c.file(), c.overrides(),
-                        c.dir(), c.format(), c.rotateBytes(), c.rotateKeep(), c.probeLanes(), c.problems());
+                        c.dir(), c.format(), c.rotateBytes(), c.rotateKeep(), c.probeLanes(), c.inspected(),
+                        c.problems());
             } else {
                 Map<String, Level> overrides = new java.util.TreeMap<>(c.overrides());
                 overrides.put(logger.trim(), level);
                 next = new LogConfig(c.app(), c.mode(), c.console(), c.file(), overrides, c.dir(), c.format(),
-                        c.rotateBytes(), c.rotateKeep(), c.probeLanes(), c.problems());
+                        c.rotateBytes(), c.rotateKeep(), c.probeLanes(), c.inspected(), c.problems());
             }
             state = new State(next, s.file(), s.flushEach());
             VERSION.incrementAndGet();
@@ -231,6 +232,14 @@ public final class Logging {
         // With the file off there is nowhere beside the log to put a trace, and the probe's own default is
         // standard output, which is not somewhere a trace may go. So no file means no default probe.
         return c.probeFile() == null ? null : c.probeLanes();
+    }
+
+    /**
+     * Whether the Inspector may attach to this run, so the probe records every lane, traced, whatever its own settings
+     * say ({@link LogConfig#inspected}). Read once, by {@link Probe}.
+     */
+    static boolean inspected() {
+        return state().config().inspected();
     }
 
     /** Where the probe's trace goes when {@link #probeLanes} applies, or {@code null}. */

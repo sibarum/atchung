@@ -62,7 +62,7 @@ class LogConfigTest {
         assertEquals(Mode.AUTOMATION, c.mode());
         assertEquals(Level.DEBUG, c.console());
         assertEquals(Level.TRACE, c.file());
-        assertEquals("frame,input,layout,app", c.probeLanes());
+        assertEquals("all", c.probeLanes(), "--automation opens the diagnostics socket, so the Inspector reads it");
         assertEquals(c.dir().resolve("editor-probe.csv"), c.probeFile());
     }
 
@@ -73,11 +73,22 @@ class LogConfigTest {
 
     @Test
     void eitherSocketAloneIsADrivenRunAndArmsTheProbe() {
-        assertEquals("frame,input,layout,app",
-                resolve(Map.of("automation.diagnostics", "0"), false, false, true).probeLanes());
+        assertEquals("all", resolve(Map.of("automation.diagnostics", "0"), false, false, true).probeLanes());
         assertEquals(Mode.AUTOMATION, resolve(Map.of("automation.control", "7654"), false, false, true).mode());
+        assertEquals("frame,input,layout,app",
+                resolve(Map.of("automation.control", "7654"), false, false, true).probeLanes());
         assertEquals(Mode.DEV, resolve(Map.of("automation.control", "off", "automation.diagnostics", "false"),
                 false, false, true).mode());
+    }
+
+    @Test
+    void theDiagnosticsSocketAloneMakesARunTheInspectorCanTrust() {
+        assertTrue(resolve(Map.of("automation", "0"), false, false, true).inspected());
+        assertTrue(resolve(Map.of("automation.diagnostics", "7655"), false, false, true).inspected());
+        assertFalse(resolve(Map.of("automation.control", "7654"), false, false, true).inspected(),
+                "a driven run with nothing to inspect it keeps the lighter lanes");
+        assertFalse(resolve(Map.of("automation", "off"), false, false, true).inspected());
+        assertFalse(resolve(Map.of(), false, false, true).inspected());
     }
 
     @Test

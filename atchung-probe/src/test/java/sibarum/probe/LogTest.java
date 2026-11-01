@@ -32,7 +32,7 @@ class LogTest {
 
     private static LogConfig config(Mode mode, Level console, Level file, Map<String, Level> overrides, Path dir,
                                     LogConfig.Format format) {
-        return new LogConfig("t", mode, console, file, overrides, dir, format, 1024 * 1024, 2, null, List.of());
+        return new LogConfig("t", mode, console, file, overrides, dir, format, 1024 * 1024, 2, null, false, List.of());
     }
 
     /** Runs {@code body} with standard error captured, and returns what was written to it. */
@@ -240,7 +240,7 @@ class LogTest {
     @Test
     void theBannerSaysWhatWasDecidedAndWhatWasIgnored(@TempDir Path dir) throws IOException {
         LogConfig c = new LogConfig("banner", Mode.AUTOMATION, Level.OFF, Level.INFO, Map.of(), dir,
-                LogConfig.Format.TEXT, 1024, 1, null, List.of("log.level=loud is not a level"));
+                LogConfig.Format.TEXT, 1024, 1, null, false, List.of("log.level=loud is not a level"));
         String out = console(() -> {
             // configure(LogConfig) announces, like configure(String, Mode)
             Logging.configure(c);

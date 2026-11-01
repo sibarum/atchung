@@ -45,6 +45,14 @@ import java.util.function.Predicate;
  * PACKAGED       warn      info    off
  * </pre>
  *
+ * <h2>A run the Inspector can attach to records everything</h2>
+ *
+ * The diagnostics socket asked for at launch ({@code automation} or {@code automation.diagnostics}) is the one
+ * setting the Inspector needs. Such a run is {@link #inspected}: the probe records every lane, traced, and no probe
+ * setting narrows that, because the probe is decided once, before anything can attach, and a run that sends the
+ * Inspector part of what it reads is one whose panels cannot be trusted. Only where the trace goes is still asked
+ * ({@code probe.out}). The control socket alone is a driven run, not an inspected one, and keeps the lanes above.
+ *
  * <h2>A per-logger level is an instruction about that logger</h2>
  *
  * A sink's threshold filters the loggers that have nothing to say about themselves. A logger with its own
@@ -78,11 +86,13 @@ import java.util.function.Predicate;
  * @param rotateBytes size at which the file rolls over
  * @param rotateKeep  rolled files kept
  * @param probeLanes  the probe lanes this mode turns on by default, or {@code null} to leave the probe off
+ * @param inspected   whether the diagnostics socket was asked for at launch, so the probe records every lane, traced,
+ *                    whatever its own settings say (see above)
  * @param problems    settings that were present and not understood, for the banner to say so
  */
 public record LogConfig(String app, Mode mode, Level console, Level file, Map<String, Level> overrides,
                         Path dir, Format format, long rotateBytes, int rotateKeep, String probeLanes,
-                        List<String> problems) {
+                        boolean inspected, List<String> problems) {
 
     /** How a line is written. */
     public enum Format { TEXT, JSON }
@@ -206,10 +216,11 @@ public record LogConfig(String app, Mode mode, Level console, Level file, Map<St
 
         boolean fileOn = file != Level.OFF || anyOverride(overrides);
         Path dir = fileOn ? directory(name, mode, get, env) : null;
-        String lanes = mode == Mode.AUTOMATION ? "frame,input,layout,app" : null;
+        boolean inspected = on(get.apply("automation")) || on(get.apply("automation.diagnostics"));
+        String lanes = inspected ? "all" : mode == Mode.AUTOMATION ? "frame,input,layout,app" : null;
 
         return new LogConfig(name, mode, console, file, overrides, dir, format,
-                Math.max(1, rotateMb) * 1024L * 1024L, Math.max(0, keep), lanes, problems);
+                Math.max(1, rotateMb) * 1024L * 1024L, Math.max(0, keep), lanes, inspected, problems);
     }
 
     /** Whether the file is worth opening at all. */
@@ -285,8 +296,7 @@ public record LogConfig(String app, Mode mode, Level console, Level file, Map<St
         // Either socket asked for at launch, or both: control alone is a driven run, and diagnostics alone is the one
         // run that most needs the probe the mode turns on, since the probe cannot be armed after it loads.
         for (String key : new String[] {"automation", "automation.control", "automation.diagnostics"}) {
-            String automation = get.apply(key);
-            if (automation != null && !automation.equalsIgnoreCase("off") && !automation.equalsIgnoreCase("false")) {
+            if (on(get.apply(key))) {
                 return Mode.AUTOMATION;
             }
         }
@@ -294,6 +304,11 @@ public record LogConfig(String app, Mode mode, Level console, Level file, Map<St
             return Mode.TEST;
         }
         return env.nativeImage() ? Mode.PACKAGED : Mode.DEV;
+    }
+
+    /** Whether a socket setting asks for the socket: present, and neither {@code off} nor {@code false}. */
+    private static boolean on(String socket) {
+        return socket != null && !socket.equalsIgnoreCase("off") && !socket.equalsIgnoreCase("false");
     }
 
     private static Path directory(String app, Mode mode, Function<String, String> get, Env env) {

@@ -39,6 +39,14 @@ final class Sink {
     }
 
     /**
+     * Nowhere: the rows still reach the live sinks, and nothing is written. For an inspected run whose log file is
+     * off, where standard output is not somewhere a trace may go and the Inspector is the reader.
+     */
+    static Sink none() {
+        return new Sink(Writer.nullWriter(), null, false);
+    }
+
+    /**
      * A file at {@code path}, truncated. Falls back to {@link #stdout()} with one line of explanation if the
      * file cannot be opened: a profiling run that dies because its log directory does not exist has wasted the
      * reproduction, and the reproduction is the expensive part.

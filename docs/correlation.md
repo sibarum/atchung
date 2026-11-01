@@ -5,7 +5,7 @@ every GUI write in a capture, what set it off. Lands here because the bus, the l
 
 ## Why
 
-Pix playing a video posted 400–600 GUI writes a second, and finding the code that sent them meant reading four
+Rasterware playing a video posted 400–600 GUI writes a second, and finding the code that sent them meant reading four
 repos. The first plan for answering that cheaply was to sample the stack at each post. A stack says *where* a write
 was sent from, but not *why* that code ran, and it ends at the thread's run loop: a write posted from a decoder
 thread, or from a handler the bus called, has lost its cause by the time anyone looks. A correlation ID travels

@@ -91,10 +91,16 @@ public final class Inbox {
 
     /**
      * Every topic subscribed to here, in the order subscribed: so whoever owns the inbox can compare what it hears
-     * with what it declared.
+     * with what it declared. The channel a {@link Chain}'s waits keep their timers and runs on is the chain's own, not
+     * the component's, and is left out; a topic a wait listens for is the component's, and is in.
      */
     public List<Topic<?>> topics() {
-        return List.copyOf(subscribed);
+        if (waits == null) {
+            return List.copyOf(subscribed);
+        }
+        List<Topic<?>> out = new ArrayList<>(subscribed);
+        out.remove(waits.signals);
+        return List.copyOf(out);
     }
 
     /**

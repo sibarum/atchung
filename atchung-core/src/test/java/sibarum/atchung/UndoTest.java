@@ -47,7 +47,7 @@ class UndoTest {
     /** A history, two undoable ledgers of strings, and their steps. */
     private static final class Setup {
         final Atchung bus = Atchung.create();
-        final Tick tick = bus.tick(null);
+        final Tick tick = bus.tick(null).alarm(new HandClock(bus)).whenOverdue(Tick.Overdue.FAIL);
         final Undo undo = Undo.build(tick.inbox("history"), "test.history", 64, 10);
         final List<Undo.Outcome> outcomes = new ArrayList<>();
 
@@ -118,7 +118,7 @@ class UndoTest {
     @Test
     void aChainRunIsOneGroupOnEveryLedgerItReached() {
         Setup s = new Setup();
-        Chain<String, Click> chain = Chain.start("click", s.a, s.clicked).then(Asked.class, s.b, s.asked).build();
+        Chain<String, Click, Object> chain = Chain.start("click", s.a, s.clicked).then(Asked.class, s.b, s.asked).build();
         s.bus.publish(chain.topic(), chain.with(new Click()));
         s.tick.run(later());
         assertEquals("a0+", s.a.state().value());
@@ -134,20 +134,23 @@ class UndoTest {
         assertEquals("b0!", s.b.state().value());
     }
 
+    record Held(Chain.Resume waiting) {
+    }
+
     @Test
     void aStepThatResumesAHeldRunIsPartOfIt() {
         Setup s = new Setup();
-        Ledger.Builder<Chain.Resume> pb = Ledger.of(new Chain.Resume(null)).undoable(s.undo);
-        Step<Chain.Resume, Asked> hold = pb.step("hold", (r, q, out) -> out.hold());
-        Step<Chain.Resume, Answer> answered = pb.step("answered", (r, a, out) -> {
-            out.resume(r, a);
-            return new Chain.Resume(null);
+        Ledger.Builder<Held> pb = Ledger.of(new Held(null)).undoable(s.undo);
+        Step<Held, Asked> hold = pb.step("hold", (r, q, out) -> new Held(out.hold()));
+        Step<Held, Answer> answered = pb.step("answered", (r, a, out) -> {
+            out.resume(r.waiting(), a);
+            return new Held(null);
         });
-        Ledger<Chain.Resume> prompts = pb.build(s.tick.inbox("prompts"), "test.prompts", 16);
+        Ledger<Held> prompts = pb.build(s.tick.inbox("prompts"), "test.prompts", 16);
         Ledger.Builder<String> cb = Ledger.of("c0").undoable(s.undo);
         Step<String, Answer> close = cb.step("close", (c, a, out) -> "closed");
         Ledger<String> c = cb.build(s.tick.inbox("c"), "test.c", 16);
-        Chain<String, Click> chain = Chain.start("held", s.a, s.clicked)
+        Chain<String, Click, Object> chain = Chain.start("held", s.a, s.clicked)
                 .then(Asked.class, prompts, hold)
                 .then(Answer.class, c, close)
                 .build();
@@ -169,7 +172,7 @@ class UndoTest {
     @Test
     void aLedgerChangedSinceTheGroupIsAConflictAndNothingMoves() {
         Setup s = new Setup();
-        Chain<String, Click> chain = Chain.start("click", s.a, s.clicked).then(Asked.class, s.b, s.asked).build();
+        Chain<String, Click, Object> chain = Chain.start("click", s.a, s.clicked).then(Asked.class, s.b, s.asked).build();
         s.bus.publish(chain.topic(), chain.with(new Click()));
         s.tick.run(later());
 

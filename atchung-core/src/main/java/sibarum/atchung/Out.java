@@ -28,8 +28,13 @@ public final class Out {
     Object outcome;
     /** Whether the running step has given an outcome or held its run. */
     private boolean went;
-    /** The first run the running step resumed, or 0: a step that answers a held run is part of it. */
+    /** The undo group of the first run the running step resumed, or 0: a step that answers a held run is part of it. */
     private long resumed;
+    /** The run the running step held, kept by the ledger once the step returns, or null. */
+    Waits.Hold held;
+    /** The holds the running step resumed, let go by the ledger once the step returns. */
+    private Waits.Hold[] resumes = new Waits.Hold[2];
+    private int resumeCount;
 
     Out(Inbox owner) {
         this.owner = owner;
@@ -40,12 +45,31 @@ public final class Out {
         this.run = run;
     }
 
+    /** The step returned: keep the bound of the run it held, and let go of the ones it resumed. */
+    void commit() {
+        if (held == null && resumeCount == 0) {
+            return;
+        }
+        Waits waits = Waits.of(owner);
+        if (held != null) {
+            waits.held(held);
+        }
+        for (int i = 0; i < resumeCount; i++) {
+            waits.resumed(resumes[i]);
+        }
+    }
+
     void end() {
         running = null;
         run = null;
         outcome = null;
         went = false;
         resumed = 0;
+        held = null;
+        for (int i = 0; i < resumeCount; i++) {
+            resumes[i] = null;
+        }
+        resumeCount = 0;
     }
 
     /** Send {@code event} on {@code topic} when the round ends, unless the step sending it throws. */
@@ -72,32 +96,78 @@ public final class Out {
     }
 
     /**
-     * Hold the run this step is in, to be {@link #resume resumed} by a later step: for a step that waits on a person
-     * or a job. Keep the {@link Chain.Resume} in the ledger's state.
+     * Hold the run this step is in, to be {@link #resume resumed} by a later step on this ledger's inbox: for a step
+     * that waits on a job, or on anything a chain's waits cannot say. Keep the {@link Chain.Resume} in the ledger's
+     * state.
+     *
+     * <p><b>The hold is bounded</b>, as every wait is: by the link's {@code within(...)}, else the chain's default, else
+     * the tick's. When the bound runs out first the run goes on with a {@link TimedOut}, and a resume after that is
+     * refused. A link that may wait forever says {@code forever()}.
      *
      * @throws IllegalStateException if this step is not running in a chain, or has already given an outcome
      */
     public Chain.Resume hold() {
+        return hold(false);
+    }
+
+    /**
+     * Hold the run until the person answers, through the framework's dialogs, which guarantee an answer (closing one
+     * unanswered answers too): bounded by the dialog rather than a time, because a person may take an hour
+     * (vexelray-framework's {@code docs/plans/chains.md}, ruling 4). Otherwise as {@link #hold()}.
+     */
+    public Chain.Resume holdForPerson() {
+        return hold(true);
+    }
+
+    private Chain.Resume hold(boolean person) {
         check();
         if (run == null) {
             throw new IllegalStateException("only a step running in a chain has a run to hold");
         }
         once();
-        return new Chain.Resume(run);
+        held = new Waits.Hold(run, owner, person);
+        return new Chain.Resume(run, held);
     }
 
     /**
      * Carry a held run on, with {@code event} as the outcome of the step that held it. Sent with this step's other
-     * sends, and taken back with them if this step throws.
+     * sends, and taken back with them if this step throws. A run goes on once: one already resumed, or whose bound
+     * ran out, is refused and traced, not taken twice.
+     *
+     * @throws IllegalStateException if it is resumed on another inbox than the one whose step held it
      */
     public void resume(Chain.Resume held, Object event) {
         Objects.requireNonNull(held, "held");
         Objects.requireNonNull(event, "event");
         check();
-        if (resumed == 0) {
-            resumed = held.run.id();
+        Waits.Hold hold = held.hold;
+        if (hold.inbox != owner) {
+            throw new IllegalStateException("a held run is resumed on the inbox whose step held it, '" + hold.inbox.name
+                    + "', and this step runs on '" + owner.name + "': keep the Resume in that ledger's state");
         }
+        if (hold.done || resuming(hold)) {
+            if (sibarum.probe.Probe.ON) {
+                sibarum.probe.Probe.mark(sibarum.probe.Lane.BUS, "chain resumed late", held.toString());
+            }
+            return;
+        }
+        if (resumed == 0) {
+            resumed = held.run.life().group;
+        }
+        if (resumeCount == resumes.length) {
+            resumes = java.util.Arrays.copyOf(resumes, resumeCount * 2);
+        }
+        resumes[resumeCount++] = hold;
         held.run.chain().advance(held.run, event, owner);
+    }
+
+    private boolean resuming(Waits.Hold hold) {
+        for (int i = 0; i < resumeCount; i++) {
+            if (resumes[i] == hold) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The id of the chain run this step is in, the same in every step of it; 0 when it is not in one. */
@@ -107,10 +177,11 @@ public final class Out {
     }
 
     /**
-     * What the running step's change is undone with: its run, or the run it resumed, or 0 for a step on its own.
+     * What the running step's change is undone with: its run's group (the root run's id, so a child run's changes go
+     * with its parent's), or the group of the run it resumed, or 0 for a step on its own.
      */
     long group() {
-        return run != null ? run.id() : resumed;
+        return run != null ? run.life().group : resumed;
     }
 
     /** Queue {@code work} for the coordinator, between this round and the next. Taken back if the step throws. */

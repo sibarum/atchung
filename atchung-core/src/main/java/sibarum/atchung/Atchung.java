@@ -256,12 +256,15 @@ public final class Atchung {
         @Override
         void doDeliver(T event) {
             long cause = Cause.current();
+            long run = Runs.current();
             executor.execute(() -> {
                 long previous = Cause.enter(cause);
+                long previousRun = Runs.enter(run);
                 try {
                     subscriber.on(event);
                 } finally {
                     Cause.exit(previous);
+                    Runs.exit(previousRun);
                 }
             });
         }

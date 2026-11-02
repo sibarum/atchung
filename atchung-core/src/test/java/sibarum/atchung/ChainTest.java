@@ -85,7 +85,8 @@ class ChainTest {
     /** The witness: three ledgers on three inboxes, and the chain across them. */
     private static final class Close {
         final Atchung bus = Atchung.create();
-        final Tick tick = bus.tick(null);
+        final HandClock clock = new HandClock(bus);
+        final Tick tick = bus.tick(null).alarm(clock).whenOverdue(Tick.Overdue.FAIL);
         final List<String> shown = new ArrayList<>();
         final List<Long> runs = new ArrayList<>();
 
@@ -94,7 +95,7 @@ class ChainTest {
         final Ledger<Prompts> dialogs;
         final Step<View, Click> closeClicked;
         final Step<Prompts, Answer> answered;
-        final Chain<View, Click> chain;
+        final Chain<View, Click, Object> chain;
 
         Close(boolean dirty) {
             tick.inbox("listener").subscribe(SHOWN, shown::add, 16);
@@ -281,7 +282,7 @@ class ChainTest {
         Step<Doc, Save> save = tb.step("save", (d, s, out) -> d.closed(true));
         Step<Doc, Answer> any = tb.step("any", (d, a, out) -> d.closed(false));
         Ledger<Doc> target = tb.build(tick.inbox("target"), "test.target", 16);
-        Chain<View, Answer> chain = Chain.start("catch", source, start)
+        Chain<View, Answer, Object> chain = Chain.start("catch", source, start)
                 .then(Save.class, target, save)
                 .or(Answer.class, target, any)
                 .build();
@@ -324,7 +325,7 @@ class ChainTest {
 
         IllegalStateException thrown = assertThrows(IllegalStateException.class, () -> b.or(Save.class, source, other));
         assertEquals("chain 'first': or(...) adds to a link made by then(...); a run's first step is the one it starts "
-                + "with", thrown.getMessage());
+                + "with, and a wait has branches, not alternatives", thrown.getMessage());
     }
 
     @Test
@@ -357,7 +358,7 @@ class ChainTest {
         Ledger.Builder<View> bb = Ledger.of(new View(0));
         Step<View, CloseAsked> count = bb.step("count", (v, asked, out) -> new View(v.clicks() + 1));
         Ledger<View> b = bb.build(tick.inbox("b"), "test.b", 16);
-        Chain<View, Click> chain = Chain.start("throws", a, fails).then(CloseAsked.class, b, count).build();
+        Chain<View, Click, Object> chain = Chain.start("throws", a, fails).then(CloseAsked.class, b, count).build();
 
         bus.publish(chain.topic(), chain.with(new Click(1)));
 
@@ -389,7 +390,7 @@ class ChainTest {
             return v;
         });
         Ledger<View> a = ab.build(tick.inbox("a"), "test.a", 16);
-        Chain<View, Click> chain = Chain.start("twice", a, twice).build();
+        Chain<View, Click, Object> chain = Chain.start("twice", a, twice).build();
 
         bus.publish(chain.topic(), chain.with(new Click(1)));
 

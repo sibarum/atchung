@@ -95,10 +95,19 @@ public final class Ledger<T> {
             throw new IllegalArgumentException("step not declared on the ledger at '" + topic.name() + "': "
                     + step.name());
         }
+        if (run != null && run.life().isCut()) {
+            // A run cut off by the wait that started it takes no further step (chains.md, ruling 8).
+            if (sibarum.probe.Probe.ON) {
+                sibarum.probe.Probe.mark(sibarum.probe.Lane.BUS, run.chain().stepName(), "cut", run.id());
+            }
+            return;
+        }
         int mark = owner.outSize;
         int betweenMark = owner.betweenSize;
         T next;
         long group;
+        // A step works in its run's id, so every message it sends carries it, and a reply finds the run that asked.
+        long outerRun = run == null ? 0 : Runs.enter(run.id());
         out.begin(run);
         try {
             next = step.applyTo(state.value(), args, out);
@@ -109,6 +118,7 @@ public final class Ledger<T> {
             if (out.outcome != null) {
                 run.chain().advance(run, out.outcome, owner);
             }
+            out.commit();
             group = out.group();
         } catch (RuntimeException | Error e) {
             owner.discardFrom(mark);
@@ -116,6 +126,9 @@ public final class Ledger<T> {
             throw e;
         } finally {
             out.end();
+            if (run != null) {
+                Runs.exit(outerRun);
+            }
         }
         if (undo == null) {
             state.commitIfChanged(replace, next);

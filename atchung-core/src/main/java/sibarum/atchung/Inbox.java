@@ -37,6 +37,8 @@ public final class Inbox {
         /** The piece of state the message writes, or null for an edge. */
         Object key;
         long cause;
+        /** The chain run the message belongs to, or {@link Runs#NONE}: see {@link Runs}. */
+        long run;
         int hops;
         Entry prev;
         Entry next;
@@ -53,6 +55,7 @@ public final class Inbox {
     Topic<?>[] outTopics = new Topic<?>[16];
     Object[] outEvents = new Object[16];
     long[] outCauses = new long[16];
+    long[] outRuns = new long[16];
     int[] outHops = new int[16];
     int outSize;
 
@@ -67,6 +70,9 @@ public final class Inbox {
     int deliveredThisRound;
     /** What a subscriber threw in this round, for the coordinator to rethrow. */
     Throwable failure;
+
+    /** The runs waiting on this inbox, and the timers bounding them, made by the first chain built over it. */
+    Waits waits;
 
     /** Every topic subscribed here, in order: what {@link #topics()} answers. */
     private final List<Topic<?>> subscribed = new ArrayList<>();
@@ -206,21 +212,21 @@ public final class Inbox {
     // ------------------------------------------------------------------------------------------- the coordinator
 
     /** Queue a message for {@code reg} at the back, or in place of the queued write to its key. */
-    <T> void enqueue(TickReg<T> reg, T event, Object key, long cause, int hops) {
+    <T> void enqueue(TickReg<T> reg, T event, Object key, long cause, long run, int hops) {
         if (key != null) {
             Entry queued = reg.cells.get(key);
             if (queued != null) {
                 // Unlinked and relinked at the back, as Fold explains: the survivor belongs where the write that
                 // survived was, after any edge that arrived between the two.
                 unlink(queued);
-                link(queued, event, cause, hops);
+                link(queued, event, cause, run, hops);
                 return;
             }
         }
         Entry e = obtain();
         e.reg = reg;
         e.key = key;
-        link(e, event, cause, hops);
+        link(e, event, cause, run, hops);
         if (key != null) {
             reg.cells.put(key, e);
         } else {
@@ -228,9 +234,10 @@ public final class Inbox {
         }
     }
 
-    private void link(Entry e, Object event, long cause, int hops) {
+    private void link(Entry e, Object event, long cause, long run, int hops) {
         e.event = event;
         e.cause = cause;
+        e.run = run;
         e.hops = hops;
         e.prev = tail;
         e.next = null;
@@ -273,6 +280,7 @@ public final class Inbox {
         e.event = null;
         e.key = null;
         e.cause = Cause.NONE;
+        e.run = Runs.NONE;
         e.prev = null;
         e.next = null;
         if (freeCount < POOL) {
@@ -295,6 +303,8 @@ public final class Inbox {
         }
         Thread me = Thread.currentThread();
         long lane = Cause.current();
+        long[] runSlot = Runs.slot();
+        long laneRun = runSlot[0];
         long now = System.currentTimeMillis();
         delivering = me;
         try {
@@ -310,6 +320,7 @@ public final class Inbox {
                 Object event = e.event;
                 hops = e.hops;
                 long cause = e.cause;
+                long run = e.run;
                 if (e.key != null) {
                     reg.cells.remove(e.key);
                 } else {
@@ -322,6 +333,7 @@ public final class Inbox {
                 reg.delivered++;
                 reg.lastDeliveredMillis = now;
                 Cause.enter(cause);
+                runSlot[0] = run;
                 if (reg.receiveRow != null) {
                     // In the message's cause, so a reader following it sees which inbox it reached, and when.
                     Probe.mark(Lane.BUS, "receive", reg.receiveRow, hops);
@@ -336,6 +348,7 @@ public final class Inbox {
             }
         } finally {
             Cause.exit(lane);
+            runSlot[0] = laneRun;
             delivering = null;
             hops = 0;
         }
@@ -371,11 +384,13 @@ public final class Inbox {
             outTopics = Arrays.copyOf(outTopics, n * 2);
             outEvents = Arrays.copyOf(outEvents, n * 2);
             outCauses = Arrays.copyOf(outCauses, n * 2);
+            outRuns = Arrays.copyOf(outRuns, n * 2);
             outHops = Arrays.copyOf(outHops, n * 2);
         }
         outTopics[n] = topic;
         outEvents[n] = event;
         outCauses[n] = Cause.current();
+        outRuns[n] = Runs.current();
         outHops[n] = hops + 1;
         outSize = n + 1;
     }

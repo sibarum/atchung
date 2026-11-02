@@ -1,5 +1,6 @@
 package sibarum.atchung;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -129,19 +130,51 @@ public final class Tick {
     private TickReg<?>[] stagedRegs = new TickReg<?>[64];
     private Object[] stagedEvents = new Object[64];
     private long[] stagedCauses = new long[64];
+    private long[] stagedRuns = new long[64];
     private int staged;
     private TickReg<?>[] spareRegs = new TickReg<?>[64];
     private Object[] spareEvents = new Object[64];
     private long[] spareCauses = new long[64];
+    private long[] spareRuns = new long[64];
 
     // Sends for subscribers outside this tick, held until it ends. The coordinator's alone.
     private Atchung.Reg<?>[] outRegs = new Atchung.Reg<?>[64];
     private Object[] outEvents = new Object[64];
     private long[] outCauses = new long[64];
+    private long[] outRuns = new long[64];
     private int out;
 
     private int lastRounds;
     private boolean lastCarried;
+
+    /**
+     * How long a {@link Chain}'s wait may last when neither it nor its chain says, by default: long enough that reaching
+     * it means something is wrong rather than slow (vexelray-framework's {@code docs/plans/chains.md}, answered
+     * 2026-11-02). A wait that is slow by nature says {@code within(...)} or {@code forever()}.
+     */
+    public static final Duration DEFAULT_BOUND = Duration.ofSeconds(5);
+
+    /** What a default bound running out is said to: a bug, since nobody stated a bound (chains.md, ruling 7). */
+    @FunctionalInterface
+    public interface Overdue {
+        void overdue(String what);
+
+        /** Traced, and nothing else: the run has already gone on with its failure, and the window stays live. */
+        Overdue TRACE = what -> {
+            if (Probe.ON) {
+                Probe.count(Lane.BUS, "overdue");
+            }
+        };
+
+        /** Thrown, so the tick's run throws it: what a test wants, as a frame that changed in one frame fails one. */
+        Overdue FAIL = what -> {
+            throw new IllegalStateException(what);
+        };
+    }
+
+    private volatile Alarm alarm;
+    private volatile Duration defaultBound = DEFAULT_BOUND;
+    private volatile Overdue overdue = Overdue.TRACE;
 
     Tick(Atchung bus, Runnable arrival, int maxHops) {
         if (maxHops < 1) {
@@ -175,6 +208,45 @@ public final class Tick {
         Inbox in = new Inbox(this, name, lane, inboxes.size());
         inboxes.add(in);
         return in;
+    }
+
+    /**
+     * The time this tick's chains keep their bounds with: the framework's timer, or a {@link HandClock} in a test.
+     * Without one, a chain that has to keep a bound refuses, by name, the first time it would.
+     */
+    public Tick alarm(Alarm alarm) {
+        this.alarm = Objects.requireNonNull(alarm, "alarm");
+        return this;
+    }
+
+    /** The alarm this tick's chains keep their bounds with, or null. */
+    public Alarm alarm() {
+        return alarm;
+    }
+
+    /** Bound every wait that states nothing, and whose chain states nothing, by {@code bound} ({@link #DEFAULT_BOUND}). */
+    public Tick defaultBound(Duration bound) {
+        Objects.requireNonNull(bound, "bound");
+        if (bound.isZero() || bound.isNegative()) {
+            throw new IllegalArgumentException("a bound is some time: " + bound);
+        }
+        this.defaultBound = bound;
+        return this;
+    }
+
+    /** How long a wait lasts that states nothing, and whose chain states nothing. */
+    public Duration defaultBound() {
+        return defaultBound;
+    }
+
+    /** Who hears that a default bound ran out ({@link Overdue#TRACE} until told). */
+    public Tick whenOverdue(Overdue overdue) {
+        this.overdue = Objects.requireNonNull(overdue, "overdue");
+        return this;
+    }
+
+    Overdue overdue() {
+        return overdue;
     }
 
     /** A tick on one thread: {@link #run(long, Lanes)} with {@link #ONE_THREAD}. */
@@ -313,6 +385,7 @@ public final class Tick {
         TickReg<?>[] regs;
         Object[] events;
         long[] causes;
+        long[] runs;
         int n;
         synchronized (lock) {
             n = staged;
@@ -322,17 +395,20 @@ public final class Tick {
             regs = stagedRegs;
             events = stagedEvents;
             causes = stagedCauses;
+            runs = stagedRuns;
             stagedRegs = spareRegs;
             stagedEvents = spareEvents;
             stagedCauses = spareCauses;
+            stagedRuns = spareRuns;
             spareRegs = null;
             spareEvents = null;
             spareCauses = null;
+            spareRuns = null;
             staged = 0;
         }
         try {
             for (int i = 0; i < n; i++) {
-                enqueue(regs[i], events[i], causes[i], 0);
+                enqueue(regs[i], events[i], causes[i], runs[i], 0);
             }
         } finally {
             java.util.Arrays.fill(regs, 0, n, null);
@@ -341,13 +417,14 @@ public final class Tick {
                 spareRegs = regs;
                 spareEvents = events;
                 spareCauses = causes;
+                spareRuns = runs;
             }
         }
     }
 
     @SuppressWarnings("unchecked")
-    private static <T> void enqueue(TickReg<T> reg, Object event, long cause, int hops) {
-        reg.enqueue((T) event, cause, hops);
+    private static <T> void enqueue(TickReg<T> reg, Object event, long cause, long run, int hops) {
+        reg.enqueue((T) event, cause, run, hops);
     }
 
     /** Empty every outbox, in inbox order: into the inboxes for the next round, or out, for when the tick ends. */
@@ -355,7 +432,7 @@ public final class Tick {
         for (Inbox in : all) {
             int n = in.outSize;
             for (int i = 0; i < n; i++) {
-                fanOut(in.outTopics[i], in.outEvents[i], in.outCauses[i], in.outHops[i]);
+                fanOut(in.outTopics[i], in.outEvents[i], in.outCauses[i], in.outRuns[i], in.outHops[i]);
                 in.outTopics[i] = null;
                 in.outEvents[i] = null;
             }
@@ -363,7 +440,7 @@ public final class Tick {
         }
     }
 
-    private void fanOut(Topic<?> topic, Object event, long cause, int hops) {
+    private void fanOut(Topic<?> topic, Object event, long cause, long run, int hops) {
         Atchung.Reg<?>[] regs = bus.registered(topic);
         if (regs == null) {
             // As Atchung.publish counts it: a send nobody hears is the shape of "the message never arrived".
@@ -373,22 +450,24 @@ public final class Tick {
         // The bus's snapshot, as a publish walks it: one registration set for the whole fan-out, and no iterator.
         for (Atchung.Reg<?> reg : regs) {
             if (reg instanceof TickReg<?> t && t.inbox.tick == this) {
-                enqueue(t, event, cause, hops);
+                enqueue(t, event, cause, run, hops);
             } else {
-                holdOut(reg, event, cause);
+                holdOut(reg, event, cause, run);
             }
         }
     }
 
-    private void holdOut(Atchung.Reg<?> reg, Object event, long cause) {
+    private void holdOut(Atchung.Reg<?> reg, Object event, long cause, long run) {
         if (out == outRegs.length) {
             outRegs = java.util.Arrays.copyOf(outRegs, out * 2);
             outEvents = java.util.Arrays.copyOf(outEvents, out * 2);
             outCauses = java.util.Arrays.copyOf(outCauses, out * 2);
+            outRuns = java.util.Arrays.copyOf(outRuns, out * 2);
         }
         outRegs[out] = reg;
         outEvents[out] = event;
         outCauses[out] = cause;
+        outRuns[out] = run;
         out++;
     }
 
@@ -404,10 +483,11 @@ public final class Tick {
         int n = out;
         out = 0;
         long coordinator = Cause.current();
+        long coordinatorRun = Runs.current();
         try {
             for (int i = 0; i < n; i++) {
                 if (outRegs[i] instanceof TickReg<?> t) {
-                    t.inbox.tick.stageShare(outRegs, outEvents, outCauses, n);
+                    t.inbox.tick.stageShare(outRegs, outEvents, outCauses, outRuns, n);
                 }
             }
             for (int i = 0; i < n; i++) {
@@ -415,10 +495,12 @@ public final class Tick {
                     continue;   // staged into another tick, with the rest of that tick's share
                 }
                 Cause.enter(outCauses[i]);
+                Runs.enter(outRuns[i]);
                 deliverOut(outRegs[i], outEvents[i]);
             }
         } finally {
             Cause.exit(coordinator);
+            Runs.exit(coordinatorRun);
             java.util.Arrays.fill(outRegs, 0, n, null);
             java.util.Arrays.fill(outEvents, 0, n, null);
         }
@@ -432,9 +514,9 @@ public final class Tick {
     // ------------------------------------------------------------------------------------------- any thread
 
     /** A message from outside a tick, for {@code reg}: staged for the next one. On the publisher's thread. */
-    <T> void stage(TickReg<T> reg, T event, long cause) {
+    <T> void stage(TickReg<T> reg, T event, long cause, long run) {
         synchronized (lock) {
-            stageLocked(reg, event, cause);
+            stageLocked(reg, event, cause, run);
         }
         // Outside the lock, as Pump's arrival is: what it wakes may take the lock to ask what is staged.
         if (arrival != null) {
@@ -447,13 +529,13 @@ public final class Tick {
      * one step, and clear each one staged out of {@code regs}. Called by another tick handing over; see
      * {@link #handOver}. A paused subscription is skipped, as {@code deliver} skips it: pausing is lossy.
      */
-    void stageShare(Atchung.Reg<?>[] regs, Object[] events, long[] causes, int n) {
+    void stageShare(Atchung.Reg<?>[] regs, Object[] events, long[] causes, long[] runs, int n) {
         boolean any = false;
         synchronized (lock) {
             for (int i = 0; i < n; i++) {
                 if (regs[i] instanceof TickReg<?> t && t.inbox.tick == this) {
                     if (!t.isPaused() && t.acceptsAny(events[i])) {
-                        stageLocked(t, events[i], causes[i]);
+                        stageLocked(t, events[i], causes[i], runs[i]);
                         any = true;
                     }
                     regs[i] = null;
@@ -466,7 +548,7 @@ public final class Tick {
     }
 
     /** Stage one message. Caller holds the lock. */
-    private void stageLocked(TickReg<?> reg, Object event, long cause) {
+    private void stageLocked(TickReg<?> reg, Object event, long cause, long run) {
         if (staged == STAGING_LIMIT) {
             MailboxOverflow overflow = new MailboxOverflow(reg.topic(), STAGING_LIMIT, reg.delivered,
                     reg.subscribedMillis, reg.lastDeliveredMillis);
@@ -477,10 +559,12 @@ public final class Tick {
             stagedRegs = java.util.Arrays.copyOf(stagedRegs, staged * 2);
             stagedEvents = java.util.Arrays.copyOf(stagedEvents, staged * 2);
             stagedCauses = java.util.Arrays.copyOf(stagedCauses, staged * 2);
+            stagedRuns = java.util.Arrays.copyOf(stagedRuns, staged * 2);
         }
         stagedRegs[staged] = reg;
         stagedEvents[staged] = event;
         stagedCauses[staged] = cause;
+        stagedRuns[staged] = run;
         staged++;
     }
 }

@@ -71,11 +71,11 @@ final class TickReg<T> extends Atchung.Reg<T> {
         if (!accepts(event)) {
             return;
         }
-        inbox.tick.stage(this, event, sibarum.probe.Cause.current());
+        inbox.tick.stage(this, event, sibarum.probe.Cause.current(), Runs.current());
     }
 
     /** Queue {@code event} for the next round, folding by key on a state topic. Coordinator only. */
-    void enqueue(T event, long cause, int hops) {
+    void enqueue(T event, long cause, long run, int hops) {
         if (closed || isPaused()) {
             return;
         }
@@ -96,6 +96,6 @@ final class TickReg<T> extends Atchung.Reg<T> {
             Atchung.fatal().fault(overflow);
             throw overflow;
         }
-        inbox.enqueue(this, event, key, cause, hops);
+        inbox.enqueue(this, event, key, cause, run, hops);
     }
 }

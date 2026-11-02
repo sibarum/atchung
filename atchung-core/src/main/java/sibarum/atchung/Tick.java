@@ -146,6 +146,8 @@ public final class Tick {
 
     private int lastRounds;
     private boolean lastCarried;
+    /** How many runs have delivered anything: the number of the last, as its {@code tick.ran} row says it. */
+    private long number;
 
     /**
      * How long a {@link Chain}'s wait may last when neither it nor its chain says, by default: long enough that reaching
@@ -310,6 +312,13 @@ public final class Tick {
         }
         Probe.count(Lane.BUS, "tick rounds", lastRounds);
         Probe.count(Lane.BUS, "tick delivered", delivered);
+        // The tick's own row, beside the zone that timed it: its number, so a tool can name a tick (the zone is
+        // written as it closes, so this row follows it), and what it did. A run with nothing queued is no tick.
+        number++;
+        if (Probe.ON) {
+            Probe.mark(Lane.BUS, "tick.ran", "#" + number + " " + lastRounds + " rounds " + delivered + " delivered"
+                    + (lastCarried ? " carried" : ""));
+        }
         if (failure instanceof RuntimeException r) {
             throw r;
         }
@@ -317,6 +326,16 @@ public final class Tick {
             throw e;
         }
         return delivered;
+    }
+
+    /**
+     * The number of the last tick that delivered anything, counting from one; zero before the first. A run with nothing
+     * queued is not counted. Each counted tick writes a {@code tick.ran} row on the bus lane, after its {@code tick}
+     * zone: {@code #<number> <rounds> rounds <delivered> delivered}, and {@code carried} when it stopped at its
+     * deadline with messages still queued. Coordinator only.
+     */
+    public long number() {
+        return number;
     }
 
     /** How many rounds the last {@link #run} took; zero when it had nothing to deliver. Coordinator only. */

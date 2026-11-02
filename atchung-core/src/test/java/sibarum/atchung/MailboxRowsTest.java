@@ -241,6 +241,32 @@ class MailboxRowsTest {
     }
 
     @Test
+    void eachTickThatDeliversWritesItsNumberAfterItsZoneAndAnIdleOneWritesNothing() {
+        Topic<String> ask = Topic.of("rows.tick", String.class);
+        Atchung bus = Atchung.create();
+        Tick tick = bus.tick(null);
+        tick.inbox("c").subscribe(ask, s -> { }, 16);
+        long far = System.nanoTime() + 60_000_000_000L;
+        bus.publish(ask, "a");
+        bus.publish(ask, "b");
+        tick.run(far);
+        tick.run(far);
+        bus.publish(ask, "c");
+        tick.run(far);
+        List<String> ticks = new ArrayList<>();
+        synchronized (rows) {
+            for (Row r : rows) {
+                if (r.kind().equals("tick") || r.kind().equals("tick.ran")) {
+                    ticks.add(r.kind().equals("tick") ? "tick" : r.detail());
+                }
+            }
+        }
+        assertEquals(List.of("tick", "#1 1 rounds 2 delivered", "tick", "#2 1 rounds 1 delivered"), ticks,
+                "numbered from one, each after its zone; the run with nothing queued is no tick");
+        assertEquals(2, tick.number());
+    }
+
+    @Test
     void aMailboxNameIsOneWord() {
         Inbox in = Atchung.create().tick(null).inbox("in");
         Topic<String> topic = Topic.of("rows.named", String.class);

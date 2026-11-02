@@ -165,6 +165,19 @@ method it reached (`... to widgets dev.example.View#timeline 1`). Both details a
 These rows are a contract with the VexelRay Inspector, which draws the bus as a circuit from them
 (`vexelray-inspector/docs/bus-circuit.md` §3): change their shape there first.
 
+### Tick rows
+
+A `Tick` that delivers anything writes, on the `bus` lane and the coordinator's thread, its `tick` zone, the counts
+`tick rounds` and `tick delivered`, and then one row of its own:
+
+| kind | detail | when |
+| --- | --- | --- |
+| `tick.ran` | `#<number> <rounds> rounds <delivered> delivered [carried]` | the tick ended; `carried` when its deadline cut it short with messages still queued |
+
+The number counts from one per `Tick` (`Tick.number()`), and a run with nothing queued is not counted, so a reader
+can name a tick and place the rows of its thread between its zone's start and this row in it. The detail is composed
+only when tracing.
+
 ### The resource ledger
 
 ```

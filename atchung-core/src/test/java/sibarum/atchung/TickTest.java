@@ -261,6 +261,29 @@ class TickTest {
     }
 
     @Test
+    void anInboxNarrowedToAKeyHearsOnlyItInEverySubscriptionThatNamesNoneOfItsOwn() {
+        Topic<Press> presses = Topic.edge(Press.class, Press::window);
+        Atchung bus = Atchung.create();
+        Tick tick = bus.tick(null);
+        List<Press> plain = new ArrayList<>();
+        List<Press> own = new ArrayList<>();
+        Inbox inbox = tick.inbox("about");
+        inbox.only(presses, Set.of("about"));
+        // As a component's code subscribes, after whoever made the inbox narrowed it: no keys of its own.
+        inbox.subscribe(presses, plain::add, 4);
+        inbox.subscribe(presses, own::add, 4, Set.of("main"));
+        assertThrows(IllegalArgumentException.class, () -> inbox.only(A, Set.of("x")),
+                "an edge with no key has nothing to filter by");
+
+        bus.publish(presses, new Press("main", 1));
+        bus.publish(presses, new Press("about", 2));
+        tick.run(later());
+
+        assertEquals(List.of(new Press("about", 2)), plain, "narrowed to the inbox's key");
+        assertEquals(List.of(new Press("main", 1)), own, "a subscription's own keys are its own");
+    }
+
+    @Test
     void aScopedStateTopicFiltersByScopeAndStillFoldsByKey() {
         Topic<Title> titles = TITLE.scoped(t -> t.id() < 10 ? "main" : "about");
         Atchung bus = Atchung.create();

@@ -78,6 +78,8 @@ public final class Inbox {
     private final List<Topic<?>> subscribed = new ArrayList<>();
     /** Every subscription made here, in order: {@link TickReg#index} is a place in it. */
     final List<TickReg<?>> regs = new ArrayList<>();
+    /** Topics narrowed by {@link #only}: the keys a subscription that names none of its own hears. */
+    private final HashMap<Topic<?>, Set<?>> narrowed = new HashMap<>();
 
     Inbox(Tick tick, String name, int lane, int position) {
         this.tick = tick;
@@ -145,7 +147,25 @@ public final class Inbox {
             throw new IllegalArgumentException("topic '" + topic.name() + "' is an edge that declares no key, so it "
                     + "has nothing to filter by: declare it with Topic.edge(type, key)");
         }
+        if (keys == null) {
+            keys = narrowed.get(topic);
+        }
         return register(mailbox, topic, subscriber, capacity, keys == null ? null : Set.copyOf(keys), false);
+    }
+
+    /**
+     * From now on, every subscription made here to {@code topic} that names no keys of its own hears only messages
+     * whose key is in {@code keys}, as {@link #subscribe(Topic, Subscriber, int, Set)} filters. So whoever makes the
+     * inbox can address a keyed edge to it before its component subscribes, the component's code unchanged and a
+     * {@link Ledger}'s step on that topic included. A subscription made before this call is not changed.
+     */
+    public <T> void only(Topic<T> topic, Set<?> keys) {
+        Objects.requireNonNull(topic, "topic");
+        if (!topic.keyed()) {
+            throw new IllegalArgumentException("topic '" + topic.name() + "' is an edge that declares no key, so it "
+                    + "has nothing to filter by: declare it with Topic.edge(type, key)");
+        }
+        narrowed.put(topic, Set.copyOf(keys));
     }
 
     /**

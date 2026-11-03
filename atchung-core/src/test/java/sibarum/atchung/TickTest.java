@@ -620,4 +620,92 @@ class TickTest {
         assertTrue(allocated < 64 * 1024, "a publish and a two-round tick, ten thousand times, allocated "
                 + allocated + " bytes: the delivery path must not allocate per message");
     }
+
+    // ------------------------------------------------------------------------------------------- recording
+
+    /** One run as a recorder was told it: what it took in, what its components sent, and where it stopped. */
+    record Heard(List<Object[]> arrived, List<String> sent, int rounds, boolean carried) {
+    }
+
+    private static final class Told implements Tick.Recorder {
+        final List<Heard> runs = new ArrayList<>();
+        private List<Object[]> arrived = new ArrayList<>();
+        private List<String> sent = new ArrayList<>();
+
+        @Override
+        public void arrived(int inbox, int subscription, Object event, long run) {
+            arrived.add(new Object[] {inbox, subscription, event, run});
+        }
+
+        @Override
+        public void sent(Topic<?> topic, Object event, long run) {
+            sent.add(topic.name() + " " + event);
+        }
+
+        @Override
+        public void ran(int rounds, boolean carried) {
+            runs.add(new Heard(arrived, sent, rounds, carried));
+            arrived = new ArrayList<>();
+            sent = new ArrayList<>();
+        }
+
+        List<String> allSent() {
+            return runs.stream().flatMap(h -> h.sent().stream()).toList();
+        }
+    }
+
+    /** An editor that answers on B and writes a title, and a view that hears both: the same inboxes each time. */
+    private static Tick editorAndView(Atchung bus, List<String> seen) {
+        Tick tick = bus.tick(null);
+        Inbox editor = tick.inbox("editor");
+        Inbox view = tick.inbox("view");
+        Sender<String> toView = editor.sender(B);
+        Sender<Title> title = editor.sender(TITLE);
+        editor.subscribe(A, s -> {
+            toView.send("reply to " + s);
+            title.send(new Title(1, s));
+        }, 16);
+        view.subscribe(B, seen::add, 16);
+        view.subscribe(TITLE, t -> seen.add("title " + t.text()), 16);
+        return tick;
+    }
+
+    @Test
+    void aRecordedTickRunAgainOnTheSameInboxesSendsTheSameAndStopsWhereItStopped() {
+        Told told = new Told();
+        Atchung bus = Atchung.create();
+        List<String> seen = new ArrayList<>();
+        Tick tick = editorAndView(bus, seen).record(told);
+        bus.publish(A, "first");
+        bus.publish(TITLE, new Title(1, "outside"));
+        tick.run(System.nanoTime() - 1);
+        bus.publish(A, "second");
+        tick.run(later());
+        tick.run(later());
+
+        assertEquals(2, told.runs.size(), "a run with nothing to take in or deliver is not told");
+        Heard first = told.runs.getFirst();
+        assertEquals(List.of(List.of(0, 0, "first", 0L), List.of(1, 1, new Title(1, "outside"), 0L)),
+                first.arrived().stream().map(List::of).toList(), "each by its inbox and its subscription there");
+        assertEquals(1, first.rounds());
+        assertTrue(first.carried(), "stopped at its deadline");
+        assertEquals(List.of("test.b reply to first", "test.title Title[id=1, text=first]"), first.sent());
+
+        List<String> again = new ArrayList<>();
+        Told retold = new Told();
+        Tick replay = editorAndView(Atchung.create(), again).record(retold);
+        for (Heard h : told.runs) {
+            for (Object[] a : h.arrived()) {
+                replay.restage((int) a[0], (int) a[1], a[2], (long) a[3]);
+            }
+            replay.runFor(h.rounds());
+        }
+        assertEquals(seen, again, "the same deliveries");
+        assertEquals(told.allSent(), retold.allSent(), "the same sends, in the same order");
+        assertEquals(told.runs.stream().map(Heard::carried).toList(), retold.runs.stream().map(Heard::carried).toList(),
+                "carried over where it was, though no deadline was set");
+        assertThrows(IllegalArgumentException.class, () -> replay.restage(1, 2, "x", 0L),
+                "the view has two subscriptions, not three");
+        assertThrows(IllegalStateException.class, () -> tick.record(new Told()), "a recording starts at the first run");
+    }
 }

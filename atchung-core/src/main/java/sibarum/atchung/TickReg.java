@@ -13,6 +13,8 @@ import sibarum.probe.Probe;
 final class TickReg<T> extends Atchung.Reg<T> {
 
     final Inbox inbox;
+    /** Where this subscription is among its inbox's, counting from zero: how a recording names it ({@link Tick.Recorder}). */
+    final int index;
     final Subscriber<T> subscriber;
     private final int capacity;
     /** The keys this subscription takes, or null for all of them. Only ever set on a keyed topic: see Topic.keyed. */
@@ -43,6 +45,7 @@ final class TickReg<T> extends Atchung.Reg<T> {
             throw new IllegalArgumentException("capacity must be >= 1, was " + capacity);
         }
         this.inbox = inbox;
+        this.index = inbox.regs.size();
         this.receiveRow = !Probe.ON ? null
                 : topic.name() + " to " + inbox.name + (mailbox == null ? "" : " " + mailbox);
         this.subscriber = subscriber;

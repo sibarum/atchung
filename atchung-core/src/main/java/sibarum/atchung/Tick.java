@@ -102,6 +102,28 @@ public final class Tick {
         void lane(int index);
     }
 
+    /**
+     * What a tick took in, what its components sent, and where each run ended: enough to run the same tick again on
+     * a fresh set of the same inboxes and compare what it sends (vexelray-framework's ROADMAP, <i>Done means</i> 5).
+     * Called on the coordinator, inside {@link #run}, so an implementation that keeps what it is told allocates on the
+     * tick's thread: recording is something a run asks for, never the default.
+     *
+     * <p>A message is named by where its subscription is, {@code inbox} the inbox's position in the order they were
+     * made and {@code subscription} the subscription's among that inbox's, because the same wiring makes the same
+     * inboxes in the same order. {@code run} is the chain run it belongs to ({@code 0} for none): a fresh set of
+     * inboxes numbers its runs afresh, so whoever replays maps one onto the other by the sends that carry them.
+     */
+    public interface Recorder {
+        /** A message from outside, as the run that takes it in starts: in arrival order, before anything is delivered. */
+        void arrived(int inbox, int subscription, Object event, long run);
+
+        /** A send of one of this tick's components, as its outbox is emptied at the end of a round: in tick order. */
+        void sent(Topic<?> topic, Object event, long run);
+
+        /** The end of a run that took or delivered anything: how many rounds it ran, and whether it stopped early. */
+        void ran(int rounds, boolean carried);
+    }
+
     /** Every lane on the calling thread, in index order. Gives exactly the deliveries any other {@link Lanes} does. */
     public static final Lanes ONE_THREAD = (count, work) -> {
         for (int i = 0; i < count; i++) {
@@ -173,6 +195,9 @@ public final class Tick {
             throw new IllegalStateException(what);
         };
     }
+
+    /** Told what each run took in and sent, or null. Set before the first run; the coordinator's after. */
+    private Recorder recorder;
 
     private volatile Alarm alarm;
     private volatile Duration defaultBound = DEFAULT_BOUND;
@@ -251,6 +276,58 @@ public final class Tick {
         return overdue;
     }
 
+    /**
+     * Tell {@code recorder} what every run takes in and sends from now on.
+     *
+     * @throws IllegalStateException after the first {@link #run}, since a recording that starts part way cannot be
+     *                               run again from the start
+     */
+    public Tick record(Recorder recorder) {
+        if (started) {
+            throw new IllegalStateException("a tick is recorded from its first run, and this one has run");
+        }
+        this.recorder = Objects.requireNonNull(recorder, "recorder");
+        return this;
+    }
+
+    /**
+     * Stage {@code event} as a recording's {@link Recorder#arrived} said it: for the {@code subscription}th
+     * subscription of the {@code inbox}th inbox, in chain run {@code run}. What replays a recording calls, on a tick
+     * whose inboxes the same wiring made, before the {@link #runFor} it arrived in.
+     *
+     * @throws IllegalArgumentException when this tick has no such subscription: its inboxes are not the recording's
+     */
+    public void restage(int inbox, int subscription, Object event, long run) {
+        if (inbox < 0 || inbox >= inboxes.size() || subscription < 0
+                || subscription >= inboxes.get(inbox).regs.size()) {
+            throw new IllegalArgumentException("no subscription " + subscription + " on inbox " + inbox + " here: "
+                    + "this tick's inboxes are not the ones the recording was made on");
+        }
+        restageAs(inboxes.get(inbox).regs.get(subscription), event, run);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> void restageAs(TickReg<T> reg, Object event, long run) {
+        T e = (T) event;
+        if (reg.accepts(e)) {
+            stage(reg, e, Cause.current(), run);
+        }
+    }
+
+    /**
+     * Run one tick as a recording's {@link Recorder#ran} said it ran: {@code rounds} rounds, or until nothing is
+     * queued, whatever the time. A tick that stopped at its deadline stops at the same round again, so what it carried
+     * over is the same. On a single thread, since the order is the tick's and not the thread's.
+     *
+     * @return how many messages were delivered
+     */
+    public int runFor(int rounds) {
+        if (rounds < 0) {
+            throw new IllegalArgumentException("rounds must be >= 0, was " + rounds);
+        }
+        return run(0L, rounds, ONE_THREAD);
+    }
+
     /** A tick on one thread: {@link #run(long, Lanes)} with {@link #ONE_THREAD}. */
     public int run(long deadlineNanos) {
         return run(deadlineNanos, ONE_THREAD);
@@ -266,16 +343,25 @@ public final class Tick {
      *                          tick's sends have been handed over; the subscriber's remaining messages stay queued
      */
     public int run(long deadlineNanos, Lanes lanes) {
+        return run(deadlineNanos, Integer.MAX_VALUE, lanes);
+    }
+
+    /** {@link #run(long, Lanes)}, stopping after {@code maxRounds} rounds instead when that is not the most there is. */
+    private int run(long deadlineNanos, int maxRounds, Lanes lanes) {
         Objects.requireNonNull(lanes, "lanes");
         if (!started) {
             start();
         }
-        takeStaged();
+        int took = takeStaged();
         lastRounds = 0;
         lastCarried = false;
-        if (!anyQueued()) {
+        if (maxRounds == 0 || !anyQueued()) {
+            if (took > 0 && recorder != null) {
+                recorder.ran(0, false);
+            }
             return 0;
         }
+        boolean byRounds = maxRounds != Integer.MAX_VALUE;
         int delivered = 0;
         Throwable failure = null; // only ever a RuntimeException or an Error: Inbox.deliver catches nothing else
         try (Zone z = Probe.zone(Lane.BUS, "tick")) {
@@ -302,7 +388,7 @@ public final class Tick {
                 if (failure != null || !anyQueued()) {
                     break;
                 }
-                if (System.nanoTime() - deadlineNanos >= 0) {
+                if (byRounds ? lastRounds >= maxRounds : System.nanoTime() - deadlineNanos >= 0) {
                     lastCarried = true;
                     break;
                 }
@@ -318,6 +404,9 @@ public final class Tick {
         if (Probe.ON) {
             Probe.mark(Lane.BUS, "tick.ran", "#" + number + " " + lastRounds + " rounds " + delivered + " delivered"
                     + (lastCarried ? " carried" : ""));
+        }
+        if (recorder != null) {
+            recorder.ran(lastRounds, lastCarried);
         }
         if (failure instanceof RuntimeException r) {
             throw r;
@@ -399,8 +488,8 @@ public final class Tick {
         return false;
     }
 
-    /** Move what was staged into the inboxes, behind what was carried over, in arrival order. */
-    private void takeStaged() {
+    /** Move what was staged into the inboxes, behind what was carried over, in arrival order; how many there were. */
+    private int takeStaged() {
         TickReg<?>[] regs;
         Object[] events;
         long[] causes;
@@ -409,7 +498,7 @@ public final class Tick {
         synchronized (lock) {
             n = staged;
             if (n == 0) {
-                return;
+                return 0;
             }
             regs = stagedRegs;
             events = stagedEvents;
@@ -426,7 +515,11 @@ public final class Tick {
             staged = 0;
         }
         try {
+            Recorder r = recorder;
             for (int i = 0; i < n; i++) {
+                if (r != null) {
+                    r.arrived(regs[i].inbox.position, regs[i].index, events[i], runs[i]);
+                }
                 enqueue(regs[i], events[i], causes[i], runs[i], 0);
             }
         } finally {
@@ -439,6 +532,7 @@ public final class Tick {
                 spareRuns = runs;
             }
         }
+        return n;
     }
 
     @SuppressWarnings("unchecked")
@@ -451,6 +545,9 @@ public final class Tick {
         for (Inbox in : all) {
             int n = in.outSize;
             for (int i = 0; i < n; i++) {
+                if (recorder != null) {
+                    recorder.sent(in.outTopics[i], in.outEvents[i], in.outRuns[i]);
+                }
                 fanOut(in.outTopics[i], in.outEvents[i], in.outCauses[i], in.outRuns[i], in.outHops[i]);
                 in.outTopics[i] = null;
                 in.outEvents[i] = null;

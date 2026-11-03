@@ -76,6 +76,8 @@ public final class Inbox {
 
     /** Every topic subscribed here, in order: what {@link #topics()} answers. */
     private final List<Topic<?>> subscribed = new ArrayList<>();
+    /** Every subscription made here, in order: {@link TickReg#index} is a place in it. */
+    final List<TickReg<?>> regs = new ArrayList<>();
 
     Inbox(Tick tick, String name, int lane, int position) {
         this.tick = tick;
@@ -179,6 +181,7 @@ public final class Inbox {
             }
         }
         TickReg<T> reg = new TickReg<>(this, mailbox, topic, subscriber, capacity, keys, byScope);
+        regs.add(reg);
         subscribed.add(topic);
         Subscription busSub = tick.bus.register(reg);
         return new Subscription() {

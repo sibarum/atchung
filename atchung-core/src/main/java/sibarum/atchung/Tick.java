@@ -202,6 +202,8 @@ public final class Tick {
     private volatile Alarm alarm;
     private volatile Duration defaultBound = DEFAULT_BOUND;
     private volatile Overdue overdue = Overdue.TRACE;
+    /** What its {@code tick.ran} rows call it, after the number; null for no name. */
+    private volatile String name;
 
     Tick(Atchung bus, Runnable arrival, int maxHops) {
         if (maxHops < 1) {
@@ -235,6 +237,21 @@ public final class Tick {
         Inbox in = new Inbox(this, name, lane, inboxes.size());
         inboxes.add(in);
         return in;
+    }
+
+    /**
+     * Name this tick in its {@code tick.ran} rows, after the number ({@code #12 logic 2 rounds ...}), so that a reader
+     * of a thread that runs several ticks can tell whose each is. One word that does not start with a digit, since the
+     * rows are read by spaces and the word after the number is otherwise the rounds.
+     */
+    public Tick named(String name) {
+        Objects.requireNonNull(name, "name");
+        if (name.isEmpty() || name.indexOf(' ') >= 0 || Character.isDigit(name.charAt(0))) {
+            throw new IllegalArgumentException("a tick's name is one word that does not start with a digit: '"
+                    + name + "'");
+        }
+        this.name = name;
+        return this;
     }
 
     /**
@@ -402,7 +419,8 @@ public final class Tick {
         // written as it closes, so this row follows it), and what it did. A run with nothing queued is no tick.
         number++;
         if (Probe.ON) {
-            Probe.mark(Lane.BUS, "tick.ran", "#" + number + " " + lastRounds + " rounds " + delivered + " delivered"
+            String n = name;
+            Probe.mark(Lane.BUS, "tick.ran", "#" + number + (n == null ? " " : " " + n + " ") + lastRounds + " rounds " + delivered + " delivered"
                     + (lastCarried ? " carried" : ""));
         }
         if (recorder != null) {
@@ -420,8 +438,9 @@ public final class Tick {
     /**
      * The number of the last tick that delivered anything, counting from one; zero before the first. A run with nothing
      * queued is not counted. Each counted tick writes a {@code tick.ran} row on the bus lane, after its {@code tick}
-     * zone: {@code #<number> <rounds> rounds <delivered> delivered}, and {@code carried} when it stopped at its
-     * deadline with messages still queued. Coordinator only.
+     * zone: {@code #<number> <rounds> rounds <delivered> delivered}, with its name after the number when it has one
+     * ({@link #named}), and {@code carried} when it stopped at its deadline with messages still queued. Coordinator
+     * only.
      */
     public long number() {
         return number;

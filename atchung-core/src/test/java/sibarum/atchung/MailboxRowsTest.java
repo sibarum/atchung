@@ -267,6 +267,31 @@ class MailboxRowsTest {
     }
 
     @Test
+    void aNamedTickSaysItsNameAfterItsNumberSoTwoTicksOnOneThreadAreToldApart() {
+        Topic<String> ask = Topic.of("rows.named.tick", String.class);
+        Atchung bus = Atchung.create();
+        Tick logic = bus.tick(null).named("logic");
+        logic.inbox("c").subscribe(ask, s -> { }, 16);
+        Tick widgets = bus.tick(null);
+        widgets.inbox("w").subscribe(ask, s -> { }, 16);
+        bus.publish(ask, "a");
+        logic.run(System.nanoTime() + 60_000_000_000L);
+        widgets.run(System.nanoTime() + 60_000_000_000L);
+        List<String> ran = new ArrayList<>();
+        synchronized (rows) {
+            for (Row r : rows) {
+                if (r.kind().equals("tick.ran")) {
+                    ran.add(r.detail());
+                }
+            }
+        }
+        assertEquals(List.of("#1 logic 1 rounds 1 delivered", "#1 1 rounds 1 delivered"), ran,
+                "the named one by its name; an unnamed one as before");
+        assertThrows(IllegalArgumentException.class, () -> bus.tick(null).named("two words"));
+        assertThrows(IllegalArgumentException.class, () -> bus.tick(null).named("2nd"));
+    }
+
+    @Test
     void aMailboxNameIsOneWord() {
         Inbox in = Atchung.create().tick(null).inbox("in");
         Topic<String> topic = Topic.of("rows.named", String.class);

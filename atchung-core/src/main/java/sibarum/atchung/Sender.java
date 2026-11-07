@@ -19,7 +19,8 @@ import sibarum.probe.Cause;
  * as that component's and its order would be wrong, which is why a framework builds senders and never shares one.
  *
  * <p>The other kind is {@link #outside}: a sender for a thread that reads from outside the process. It belongs to
- * no inbox, since it is never inside a delivery.
+ * no inbox, since it is never inside a delivery. And for a test there is {@link #collecting}, which keeps what is sent
+ * in a list and has no bus at all.
  */
 public final class Sender<T> {
 
@@ -28,12 +29,15 @@ public final class Sender<T> {
     /** For an {@link #outside} sender, its bus and the source each send begins a cause of; else null. */
     private final Atchung bus;
     private final Cause.Source source;
+    /** For a {@link #collecting} sender, where what it sends goes; else null. */
+    private final java.util.List<? super T> collected;
 
     Sender(Inbox inbox, Topic<T> topic) {
         this.inbox = inbox;
         this.topic = topic;
         this.bus = null;
         this.source = null;
+        this.collected = null;
     }
 
     private Sender(Atchung bus, Topic<T> topic, Cause.Source source) {
@@ -41,6 +45,15 @@ public final class Sender<T> {
         this.topic = topic;
         this.bus = bus;
         this.source = source;
+        this.collected = null;
+    }
+
+    private Sender(Topic<T> topic, java.util.List<? super T> collected) {
+        this.inbox = null;
+        this.topic = topic;
+        this.bus = null;
+        this.source = null;
+        this.collected = collected;
     }
 
     /**
@@ -54,6 +67,23 @@ public final class Sender<T> {
                 Objects.requireNonNull(source, "source"));
     }
 
+    /**
+     * A sender for a test, which adds each message to {@code into} on the thread that sends it, at once, with no bus,
+     * tick or inbox: what a job, a source or a widget sends is read straight off the list. It is what a test of a part
+     * that takes a sender needs and nothing more, since {@code Sender} is no functional interface
+     * (Vexplore framework-notes FN-16). Not for application code: it delivers to nobody. A part that sends from
+     * another thread wants a list that is safe there ({@code Collections.synchronizedList}).
+     *
+     * {@snippet :
+     * List<Progress> sent = new ArrayList<>();
+     * new Copier(Sender.collecting(PROGRESS, sent)).copy(from, to);
+     * assertEquals(3, sent.size());
+     * }
+     */
+    public static <T> Sender<T> collecting(Topic<T> topic, java.util.List<? super T> into) {
+        return new Sender<>(Objects.requireNonNull(topic, "topic"), Objects.requireNonNull(into, "into"));
+    }
+
     /** The topic this sends on. */
     public Topic<T> topic() {
         return topic;
@@ -62,7 +92,9 @@ public final class Sender<T> {
     /** Send {@code event}: in this round when called from a delivery to this sender's inbox, else as a publish. */
     public void send(T event) {
         Objects.requireNonNull(event, "event");
-        if (source != null) {
+        if (collected != null) {
+            collected.add(event);
+        } else         if (source != null) {
             long previous = Cause.enter(source.next());
             try {
                 bus.publish(topic, event);
@@ -78,6 +110,7 @@ public final class Sender<T> {
 
     @Override
     public String toString() {
-        return "Sender[" + topic.name() + " from " + (source != null ? source.name() : inbox.name) + "]";
+        return "Sender[" + topic.name() + " from "
+                + (collected != null ? "a test" : source != null ? source.name() : inbox.name) + "]";
     }
 }

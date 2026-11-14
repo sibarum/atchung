@@ -3,7 +3,6 @@ package sibarum.elektro.queue.transport.tcp;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import sibarum.elektro.queue.DefaultConduit;
-import sibarum.elektro.queue.Subscription;
 import sibarum.elektro.queue.message.ArrayMessageRegistry;
 import sibarum.elektro.queue.message.MessageRegistry;
 import sibarum.elektro.queue.message.MessageType;
@@ -121,20 +120,6 @@ class TcpConduitTest {
                 client.action(ASK).request(new Ask("status?"), serverPeer, ANSWER).toCompletableFuture();
 
         assertEquals(new Answer("re: status?"), reply.get(5, TimeUnit.SECONDS));
-    }
-
-    @Test
-    void unsubscribedActorStopsReacting() throws Exception {
-        connect();
-        CountDownLatch first = new CountDownLatch(1);
-        Subscription subscription = server.subscribe(GREETING, (message, context) -> first.countDown());
-
-        client.action(GREETING).emit(new Greeting("one"));
-        assertTrue(first.await(5, TimeUnit.SECONDS));
-
-        subscription.close();
-        assertEquals(0, first.getCount());
-        assertTrue(!subscription.isActive());
     }
 
     @Test

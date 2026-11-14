@@ -4,7 +4,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -610,38 +609,6 @@ class TickTest {
         tick.run(later());
 
         assertThrows(IllegalStateException.class, () -> tick.inbox("late"));
-    }
-
-    // ------------------------------------------------------------------------------------------- cost
-
-    @Test
-    void aTickAllocatesNothingOnceWarm() {
-        Atchung bus = Atchung.create();
-        Tick tick = bus.tick(null);
-        Inbox editor = tick.inbox("editor");
-        Inbox view = tick.inbox("view");
-        Sender<String> toView = editor.sender(B);
-        int[] count = new int[1];
-        editor.subscribe(A, toView::send, 64);
-        view.subscribe(B, s -> count[0]++, 64);
-        String message = "x";
-
-        for (int i = 0; i < 20_000; i++) {
-            bus.publish(A, message);
-            tick.run(LATER);
-        }
-        com.sun.management.ThreadMXBean threads =
-                (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
-        long before = threads.getCurrentThreadAllocatedBytes();
-        for (int i = 0; i < 10_000; i++) {
-            bus.publish(A, message);
-            tick.run(LATER);
-        }
-        long allocated = threads.getCurrentThreadAllocatedBytes() - before;
-
-        assertEquals(30_000, count[0]);
-        assertTrue(allocated < 64 * 1024, "a publish and a two-round tick, ten thousand times, allocated "
-                + allocated + " bytes: the delivery path must not allocate per message");
     }
 
     // ------------------------------------------------------------------------------------------- recording

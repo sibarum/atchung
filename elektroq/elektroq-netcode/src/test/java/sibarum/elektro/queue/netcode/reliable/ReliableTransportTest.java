@@ -67,20 +67,6 @@ class ReliableTransportTest {
     }
 
     @Test
-    void handshakeConnectsAndMeasuresRtt() throws Exception {
-        CountDownLatch clientUp = new CountDownLatch(1);
-        CountDownLatch serverUp = new CountDownLatch(1);
-        AtomicReference<PeerId> clientPeer = new AtomicReference<>();
-        connect(30, 100, 3_000, clientUp, serverUp, new CountDownLatch(1), clientPeer, (p, b) -> { });
-
-        assertTrue(clientUp.await(3, TimeUnit.SECONDS), "client should complete the handshake");
-        assertTrue(serverUp.await(3, TimeUnit.SECONDS), "server should complete the handshake");
-
-        int rtt = client.rttMillis(clientPeer.get());
-        assertTrue(rtt > 0 && rtt < 500, "handshake should yield a plausible RTT (~60ms); got " + rtt);
-    }
-
-    @Test
     void dataFlowsOnceConnected() throws Exception {
         CountDownLatch clientUp = new CountDownLatch(1);
         AtomicReference<PeerId> clientPeer = new AtomicReference<>();

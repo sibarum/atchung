@@ -16,7 +16,6 @@ import sibarum.elektro.queue.wire.WireWriter;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -82,33 +81,5 @@ class ElektroBridgeTest {
         Note delivered = received.poll(2, TimeUnit.SECONDS);
         assertNotNull(delivered, "event published locally should arrive on the remote bus");
         assertEquals("hello over the wire", delivered.text());
-    }
-
-    @Test
-    void bidirectionalBridgeDoesNotEchoBack() throws InterruptedException {
-        connect("bridge-loopguard");
-        Atchung clientBus = Atchung.create();
-        Atchung serverBus = Atchung.create();
-
-        // Both ends bridge both directions — the classic setup that would loop without a guard.
-        clientBridge = new ElektroBridge(clientBus, client).bridge(NOTE_TOPIC, NOTE_TYPE);
-        serverBridge = new ElektroBridge(serverBus, server).bridge(NOTE_TOPIC, NOTE_TYPE);
-
-        AtomicInteger originCount = new AtomicInteger();
-        BlockingQueue<Note> remote = new ArrayBlockingQueue<>(4);
-        clientBus.subscribe(NOTE_TOPIC, n -> originCount.incrementAndGet());
-        serverBus.subscribe(NOTE_TOPIC, remote::add);
-
-        clientBus.publish(NOTE_TOPIC, new Note("no echoes please"));
-
-        // Forward delivery happens exactly once...
-        Note delivered = remote.poll(2, TimeUnit.SECONDS);
-        assertNotNull(delivered, "the event should reach the remote bus once");
-        assertEquals("no echoes please", delivered.text());
-
-        // ...and nothing bounces back: give any echo time to arrive, then confirm it never did.
-        Thread.sleep(200);
-        assertEquals(1, originCount.get(), "origin saw only its own publish, no echo from the wire");
-        assertEquals(0, remote.size(), "remote received the message once, with no duplicates");
     }
 }

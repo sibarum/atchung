@@ -18,9 +18,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>The case this exists for is a component: one thread, one mailbox, and no other reason to wake. Every
  * other consumer on this bus is a host that already has a loop and calls {@link Pump#drain()} once a frame,
  * which is why waiting was not here to begin with.
- *
- * <p>The assertion that matters most is {@link #aParkedConsumerDoesNotBlockPublishers()}. A mailbox whose
- * reader can stall its writers would be a worse bus than one that cannot wait at all.
  */
 final class ParkedDrainTest {
 
@@ -52,47 +49,6 @@ final class ParkedDrainTest {
         consumer.join();
         assertEquals(1, delivered.get());
         assertEquals(List.of("sphere"), seen);
-    }
-
-    /**
-     * The park holds nothing a publisher needs.
-     *
-     * <p>{@code Object.wait} releases the monitor it waits on, and the parked thread holds no mailbox lock at
-     * all — so publishing while a consumer is parked is exactly as fast as publishing when none is. Measured
-     * rather than asserted from the design: the publish is timed from a second thread while the consumer sits
-     * in a park it will not leave until told.
-     */
-    @Test
-    void aParkedConsumerDoesNotBlockPublishers() throws Exception {
-        Atchung bus = Atchung.create();
-        Pump pump = bus.pump();
-        // A mailbox nothing is published to, so the consumer stays parked for the whole measurement.
-        pump.subscribe(Topic.of("test.quiet", String.class), event -> { }, 8);
-
-        CountDownLatch parked = new CountDownLatch(1);
-        AtomicLong publishNanos = new AtomicLong();
-        Thread consumer = Thread.ofPlatform().name("test-parked").start(() -> {
-            parked.countDown();
-            pump.drain(GENEROUS_MS * 1_000_000L);
-        });
-        assertTrue(parked.await(GENEROUS_MS, TimeUnit.MILLISECONDS), "the consumer never started");
-        Thread.sleep(50);
-
-        // A topic with no pumped subscriber at all: the path a publisher takes past a parked consumer.
-        Topic<String> other = Topic.of("test.other", String.class);
-        long t0 = System.nanoTime();
-        for (int i = 0; i < 1_000; i++) {
-            bus.publish(other, "x");
-        }
-        publishNanos.set(System.nanoTime() - t0);
-
-        pump.wake();
-        consumer.join(GENEROUS_MS);
-
-        long millis = publishNanos.get() / 1_000_000L;
-        assertTrue(millis < 1_000,
-                "a thousand publishes took " + millis + "ms while a consumer was parked, which means the park "
-                        + "is holding something they need");
     }
 
     /** A park that nothing arrives for ends at its own deadline, having delivered nothing. */

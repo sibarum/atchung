@@ -229,6 +229,7 @@ public final class Inbox {
             public void close() {
                 reg.closed = true;
                 busSub.close();
+                reg.wakeRoom();
             }
         };
     }
@@ -354,6 +355,9 @@ public final class Inbox {
                     reg.cells.remove(e.key);
                 } else {
                     reg.edges--;
+                    if (reg.waiting != 0) {
+                        reg.wakeRoom();
+                    }
                 }
                 recycle(e);
                 if (reg.closed) {

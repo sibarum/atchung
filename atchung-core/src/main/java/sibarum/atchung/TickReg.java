@@ -24,8 +24,20 @@ final class TickReg<T> extends Atchung.Reg<T> {
 
     /** On a state topic, the queued message for each key. Coordinator between rounds, the lane during one. */
     final HashMap<Object, Inbox.Entry> cells;
-    /** How many edges are queued, against {@link #capacity}. Coordinator between rounds, the lane during one. */
-    int edges;
+    /**
+     * How many edges are queued, against {@link #capacity}. Written by the coordinator between rounds and the lane during
+     * one; volatile so a {@link Sender#paced paced} sender on another thread can read how much room is left.
+     */
+    volatile int edges;
+    /**
+     * How many edges are staged for this subscription and not yet queued: what a paced sender counts beside
+     * {@link #edges}. Written under the tick's lock, on staging and on taking what was staged.
+     */
+    volatile int stagedEdges;
+    /** How many paced senders are waiting for room here, so a drain wakes them only when there are any. */
+    volatile int waiting;
+    /** What a paced sender waits on, and a drain or a close wakes. */
+    private final Object room = new Object();
 
     long delivered;
     /**
@@ -64,6 +76,45 @@ final class TickReg<T> extends Atchung.Reg<T> {
     @SuppressWarnings("unchecked")
     boolean acceptsAny(Object event) {
         return accepts((T) event);
+    }
+
+    /** Whether one more edge fits: what is staged and what is queued, against the capacity. Any thread. */
+    boolean hasRoom() {
+        return stagedEdges + edges < capacity;
+    }
+
+    /**
+     * Wait, on the caller's thread, until one more edge fits or this subscription is closed: what a
+     * {@link Sender#paced paced} sender does before it publishes. True at once on a state topic, which cannot overflow.
+     * False when the wait was interrupted, with the interrupt flag set again.
+     */
+    boolean awaitRoom() {
+        if (cells != null || closed || hasRoom()) {
+            return true;
+        }
+        synchronized (room) {
+            waiting++;
+            try {
+                // Waiting is counted before room is read, and a drain lowers the count before it reads waiting, so one
+                // of the two sees the other: either this sees the room, or the drain sees a waiter and wakes it.
+                while (!closed && !hasRoom()) {
+                    room.wait();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            } finally {
+                waiting--;
+            }
+        }
+        return true;
+    }
+
+    /** Wake every paced sender waiting for room here. After a drain or a close; any thread. */
+    void wakeRoom() {
+        synchronized (room) {
+            room.notifyAll();
+        }
     }
 
     /** A publish from outside the tick, on the publisher's thread: staged for the next one. */

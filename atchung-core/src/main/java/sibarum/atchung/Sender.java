@@ -31,6 +31,8 @@ public final class Sender<T> {
     private final Cause.Source source;
     /** For a {@link #collecting} sender, where what it sends goes; else null. */
     private final java.util.List<? super T> collected;
+    /** For a {@link #paced} sender: wait for room in each hearer before publishing. */
+    private final boolean paced;
 
     Sender(Inbox inbox, Topic<T> topic) {
         this.inbox = inbox;
@@ -38,14 +40,20 @@ public final class Sender<T> {
         this.bus = null;
         this.source = null;
         this.collected = null;
+        this.paced = false;
     }
 
     private Sender(Atchung bus, Topic<T> topic, Cause.Source source) {
+        this(bus, topic, source, false);
+    }
+
+    private Sender(Atchung bus, Topic<T> topic, Cause.Source source, boolean paced) {
         this.inbox = null;
         this.topic = topic;
         this.bus = bus;
         this.source = source;
         this.collected = null;
+        this.paced = paced;
     }
 
     private Sender(Topic<T> topic, java.util.List<? super T> collected) {
@@ -54,6 +62,7 @@ public final class Sender<T> {
         this.bus = null;
         this.source = null;
         this.collected = collected;
+        this.paced = false;
     }
 
     /**
@@ -65,6 +74,24 @@ public final class Sender<T> {
     public static <T> Sender<T> outside(Atchung bus, Topic<T> topic, Cause.Source source) {
         return new Sender<>(Objects.requireNonNull(bus, "bus"), Objects.requireNonNull(topic, "topic"),
                 Objects.requireNonNull(source, "source"));
+    }
+
+    /**
+     * {@link #outside}, except that a send waits, on the sender's thread, until every inbox subscription that takes the
+     * message has room for one more edge, and then publishes. For a thread that reads from outside and may rest (a
+     * source's run): waiting is the push-back that reaches whatever it reads from, since it stops reading and the pipe
+     * fills, where an ordinary publish would overflow its slowest reader and fail (vexelray-framework components.md,
+     * section 15). Room is what is staged and queued against the subscription's capacity; a state topic never waits.
+     * Only inbox subscriptions are waited for: a pumped subscriber fails as before.
+     *
+     * <p><b>Never from a thread that drains what it waits for</b>, a tick's lane or a frame loop's: it would wait on
+     * itself. <b>An interrupt ends the wait</b> and the message is not sent, with the interrupt flag set again: the
+     * thread is being stopped, and what it reads next answers the interrupt as a read does. Two paced senders racing for
+     * a reader's last slot can both pass and overflow it, which fails as any publisher's overflow does.
+     */
+    public static <T> Sender<T> paced(Atchung bus, Topic<T> topic, Cause.Source source) {
+        return new Sender<>(Objects.requireNonNull(bus, "bus"), Objects.requireNonNull(topic, "topic"),
+                Objects.requireNonNull(source, "source"), true);
     }
 
     /**
@@ -94,7 +121,10 @@ public final class Sender<T> {
         Objects.requireNonNull(event, "event");
         if (collected != null) {
             collected.add(event);
-        } else         if (source != null) {
+        } else if (source != null) {
+            if (paced && !awaitRoom(event)) {
+                return;
+            }
             long previous = Cause.enter(source.next());
             try {
                 bus.publish(topic, event);
@@ -106,6 +136,20 @@ public final class Sender<T> {
         } else {
             inbox.tick.bus.publish(topic, event);
         }
+    }
+
+    /** Wait until every inbox subscription that takes {@code event} has room; false when interrupted. */
+    private boolean awaitRoom(T event) {
+        Atchung.Reg<?>[] regs = bus.registered(topic);
+        if (regs == null) {
+            return true;
+        }
+        for (Atchung.Reg<?> r : regs) {
+            if (r instanceof TickReg<?> t && !t.isPaused() && t.acceptsAny(event) && !t.awaitRoom()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override

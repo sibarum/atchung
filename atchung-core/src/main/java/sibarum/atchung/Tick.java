@@ -532,6 +532,11 @@ public final class Tick {
             spareCauses = null;
             spareRuns = null;
             staged = 0;
+            for (int i = 0; i < n; i++) {
+                if (regs[i].cells == null) {
+                    regs[i].stagedEdges--;
+                }
+            }
         }
         try {
             Recorder r = recorder;
@@ -540,6 +545,12 @@ public final class Tick {
                     r.arrived(regs[i].inbox.position, regs[i].index, events[i], runs[i]);
                 }
                 enqueue(regs[i], events[i], causes[i], runs[i], 0);
+            }
+            // A staged edge that was not queued (its subscription closed or paused) left room behind it.
+            for (int i = 0; i < n; i++) {
+                if (regs[i].waiting != 0) {
+                    regs[i].wakeRoom();
+                }
             }
         } finally {
             java.util.Arrays.fill(regs, 0, n, null);
@@ -695,6 +706,9 @@ public final class Tick {
             stagedEvents = java.util.Arrays.copyOf(stagedEvents, staged * 2);
             stagedCauses = java.util.Arrays.copyOf(stagedCauses, staged * 2);
             stagedRuns = java.util.Arrays.copyOf(stagedRuns, staged * 2);
+        }
+        if (reg.cells == null) {
+            reg.stagedEdges++;
         }
         stagedRegs[staged] = reg;
         stagedEvents[staged] = event;
